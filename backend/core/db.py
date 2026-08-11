@@ -11,7 +11,11 @@ DATA_DIR = config.DATA_DIR
 DB_PATH = config.DB_PATH
 
 
-class Source(DeclarativeBase):
+class Base(DeclarativeBase):
+    pass
+
+
+class Source(Base):
     __tablename__ = "sources"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)  # src_<hex>
@@ -30,7 +34,7 @@ class Source(DeclarativeBase):
 Index("ix_sources_url", Source.url)  # dedup lookups by import URL
 
 
-class Project(DeclarativeBase):
+class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)  # prj_<hex>
@@ -40,7 +44,7 @@ class Project(DeclarativeBase):
     created_at: Mapped[str] = mapped_column(String(40), default="")
 
 
-class ProjectMember(DeclarativeBase):
+class ProjectMember(Base):
     __tablename__ = "project_members"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -53,7 +57,7 @@ Index("ix_project_member_unique", ProjectMember.project_id, ProjectMember.name,
       unique=True)
 
 
-class ProjectSource(DeclarativeBase):
+class ProjectSource(Base):
     __tablename__ = "project_sources"
 
     project_id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -89,7 +93,7 @@ async def init_db() -> None:
     _def_db()
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     async with _engine.begin() as conn:  # type: ignore[union-attr]
-        await conn.run_sync(DeclarativeBase.metadata.create_all)
+        await conn.run_sync(Base.metadata.create_all)
 
 async def dispose() -> None:
     global _engine, _session_factory

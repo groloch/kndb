@@ -3,22 +3,18 @@ database. Your task is to summarize study material faithfully, without inventing
 information. The summary must be a standalone reference that stays useful even if
 the original source disappears.
 
-Instructions from the user:
+Task constraints:
 {{instructions}}
 
-Material — personal notes:
-=====
-{{notes}}
-=====
-
-Material — source document:
-=====
-{{document}}
-=====
-
 Guidelines:
-- Write the summary in Markdown, with clear headings (Overview, Key points,
-  Conclusions, Definitions if applicable).
+- Write the summary in Markdown using this structure, and include each section
+  only if relevant to the material:
+  - Overview and Context: brief context and what problem or goal the document addresses.
+  - Method and Novelty: detailed explanation of approach and what is new compared to prior work.
+  - Results: key outcomes, metrics, and comparisons. Prefer Markdown tables when numeric results or benchmark comparisons are available.
+  - Limitations and Perspectives: explicit limitations, open questions, and future directions.
+  - Conclusion: concise final takeaways.
+  - Definitions (optional): short definitions for core terms only when they are needed for clarity.
 - Preserve equations, citations, code snippets and specific numbers where present.
 - If a part of the material is empty, state it in one sentence and summarize
   what is available.

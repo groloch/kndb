@@ -223,12 +223,21 @@ async def stream_summarize(sid: str, scope: str = "both", length: str = "medium"
         system = llm.load_prompt(
             "summarization",
             instructions=f"Length: {_LENS.get(length, length)}. Write in {language}.",
-            notes=notes[:6000] or "(no notes provided)",
-            document=doc[:10000] or "(no document text provided)",
+        )
+        user = (
+            "Material - personal notes:\n"
+            "=====\n"
+            f"{notes[:6000] or '(no notes provided)'}\n"
+            "=====\n\n"
+            "Material - source document:\n"
+            "=====\n"
+            f"{doc[:10000] or '(no document text provided)'}\n"
+            "=====\n\n"
+            "Write the summary now."
         )
         text = ""
         async for token in llm.stream_chat(
-            system, "Write the summary now.", max_tokens=1800, temperature=0.4,
+            system, user, temperature=0.4,
         ):
             text += token
             yield {"type": "token", "text": token}

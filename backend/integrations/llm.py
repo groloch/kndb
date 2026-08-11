@@ -120,14 +120,15 @@ def _messages(system: str, user: str) -> list:
 async def _backoff(attempt: int) -> None:
     await asyncio.sleep(min(0.4 * (2 ** attempt), 8.0))
 
-async def chat(system: str, user: str, max_tokens: int = 2048,
+async def chat(system: str, user: str, max_tokens: int | None = None,
                temperature: float = 0.6) -> str:
     payload = {
         "model": _resolved_model,
         "messages": _messages(system, user),
-        "max_tokens": max_tokens,
         "temperature": temperature,
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
     client = get_client()
     last: Exception | None = None
     for attempt in range(MAX_RETRIES):
@@ -154,15 +155,16 @@ async def chat(system: str, user: str, max_tokens: int = 2048,
         return str(content or "").strip()
     raise _llm_error("LLM request failed after retries", last or "unknown error")
 
-async def stream_chat(system: str, user: str, max_tokens: int = 2048,
+async def stream_chat(system: str, user: str, max_tokens: int | None = None,
                       temperature: float = 0.6):
     payload = {
         "model": _resolved_model,
         "messages": _messages(system, user),
-        "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": True,
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
     client = get_client()
     attempt = 0
     while True:

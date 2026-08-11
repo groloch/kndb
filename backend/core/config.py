@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
 CONFIG_PATH = Path(os.environ.get("KNDB_CONFIG", BASE_DIR / "kndb.yaml"))
 
 _DEFAULTS: dict = {
