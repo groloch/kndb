@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:,">
+<title>KNDB — Knowledge Database</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">KNDB<span class="brand-sub">knowledge database</span></div>
+  <nav class="top-nav">
+    <a href="/" class="tab active">Sources</a>
+    <a href="/projects" class="tab">Projects</a>
+  </nav>
+  <div class="top-actions">
+    <button id="btn-import" class="btn">+ Import</button>
+    <span class="sep"></span>
+    <button id="btn-quiz-gen" class="btn primary" disabled>Generate quiz</button>
+    <button id="btn-quiz-play" class="btn" disabled>Play quiz</button>
+    <button id="btn-summarize" class="btn" disabled>Summarize</button>
+    <span id="llm-status" class="llm-status" title="">…</span>
+  </div>
+</header>
+
+<main id="main" class="main">
+  <section id="panel-dir" class="panel">
+    <div class="panel-head">Directory</div>
+    <input id="search" class="search" type="search" spellcheck="false"
+           placeholder="Search title…  @tag  /project">
+    <div id="dir-list" class="dir-list"></div>
+  </section>
+  <div class="splitter" data-split="dir"></div>
+
+  <section id="panel-res" class="panel">
+    <div class="panel-head">
+      <span id="res-title" class="panel-title">Resource</span>
+      <span id="res-meta" class="pill hidden"></span>
+    </div>
+    <div id="res-body" class="res-body">
+      <div id="res-empty" class="empty">No source selected.<br>Import a paper, a website or a file with <b>+ Import</b>.</div>
+      <iframe id="res-frame" class="res-frame hidden" sandbox="allow-same-origin allow-scripts"></iframe>
+      <div id="res-md" class="res-md prose hidden"></div>
+    </div>
+    <div id="res-footer" class="res-footer hidden">
+      <input id="meta-tags" class="input" placeholder="tags, comma, separated (search: @tag)">
+      <input id="meta-category" class="input" placeholder="category / folder (e.g. math/analysis)">
+      <button id="meta-save" class="btn small">Save meta</button>
+    </div>
+  </section>
+  <div class="splitter" data-split="res"></div>
+
+  <section id="panel-note" class="panel">
+    <div class="panel-head">
+      <span class="panel-title">Notes</span>
+      <span class="note-hint">Ctrl+D toggles preview</span>
+      <span id="note-save-state" class="save-state"></span>
+    </div>
+    <div class="note-wrap">
+      <textarea id="note-editor" class="note-editor hidden" spellcheck="false"
+                placeholder="Write your personal notes in Markdown…&#10;&#10;Use 'Generate quiz' to build an interactive quiz from these notes, 'Summarize' to append a summary of the source."></textarea>
+      <div id="note-preview" class="note-preview prose hidden">
+        <p class="muted">Select a source in the directory to read and edit its notes.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="modal hidden" id="modal-import">
+  <div class="modal-box">
+    <div class="modal-head"><h3>Import a source</h3><button class="x" data-close="modal-import">×</button></div>
+    <div class="modal-body">
+      <label class="lbl">URL — web page, blog, arXiv paper, Hugging Face repo / paper</label>
+      <input id="import-url" class="input" type="text" spellcheck="false" placeholder="https://…">
+      <div class="or">— or —</div>
+      <label class="lbl">File from disk (.pdf or .md/.markdown)</label>
+      <input id="import-file" type="file" accept=".pdf,.md,.markdown,application/pdf,text/markdown">
+      <div class="modal-actions">
+        <span class="hint">Web pages are archived with their styles; text pages fall back to LLM markdown conversion.</span>
+        <button id="import-submit" class="btn primary">Import</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="modal-quiz-gen">
+  <div class="modal-box">
+    <div class="modal-head"><h3>Generate a quiz</h3><button class="x" data-close="modal-quiz-gen">×</button></div>
+    <div class="modal-body">
+      <label class="lbl">Base the quiz on</label>
+      <div class="seg">
+        <label><input type="radio" name="qz-scope" value="notes" checked><span>Notes only</span></label>
+        <label><input type="radio" name="qz-scope" value="document"><span>Document only</span></label>
+        <label><input type="radio" name="qz-scope" value="both"><span>Both</span></label>
+      </div>
+      <div class="row3">
+        <div><label class="lbl">Questions</label><select id="qz-num" class="input"><option>3</option><option selected>5</option><option>8</option><option>10</option></select></div>
+        <div><label class="lbl">Difficulty</label><select id="qz-difficulty" class="input"><option>easy</option><option selected>medium</option><option>hard</option></select></div>
+        <div><label class="lbl">Language</label><input id="qz-language" class="input" value="English" spellcheck="false"></div>
+      </div>
+      <div class="modal-actions">
+        <span class="hint">Uses the LLM server configured for KNDB (OpenAI-compatible).</span>
+        <button id="quiz-gen-submit" class="btn primary">Generate</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="modal-summarize">
+  <div class="modal-box">
+    <div class="modal-head"><h3>Summarize into notes</h3><button class="x" data-close="modal-summarize">×</button></div>
+    <div class="modal-body">
+      <label class="lbl">What to summarize</label>
+      <div class="seg">
+        <label><input type="radio" name="su-scope" value="notes"><span>Notes only</span></label>
+        <label><input type="radio" name="su-scope" value="document"><span>Document only</span></label>
+        <label><input type="radio" name="su-scope" value="both" checked><span>Both</span></label>
+      </div>
+      <div class="row3">
+        <div><label class="lbl">Length</label><select id="su-length" class="input"><option value="short">short</option><option value="medium" selected>medium</option><option value="detailed">detailed</option></select></div>
+        <div><label class="lbl">Language</label><input id="su-language" class="input" value="English" spellcheck="false"></div>
+      </div>
+      <div class="modal-actions">
+        <span class="hint">The summary is appended to this source's notes as a new section.</span>
+        <button id="summarize-submit" class="btn primary">Summarize</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="modal-quiz-play">
+  <div class="modal-box wide">
+    <div class="modal-head"><h3>Quiz session</h3><button class="x" data-close="modal-quiz-play">×</button></div>
+    <div class="modal-body" id="quiz-body"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

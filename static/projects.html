@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:,">
+<title>Projects — KNDB</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">KNDB<span class="brand-sub">knowledge database</span></div>
+  <nav class="top-nav">
+    <a href="/" class="tab">Sources</a>
+    <a href="/projects" class="tab active">Projects</a>
+  </nav>
+  <div class="top-actions">
+    <button id="btn-new" class="btn primary">+ New project</button>
+  </div>
+</header>
+
+<main class="main cols">
+  <section id="view-list" class="panel list-view">
+    <div class="panel-head">Projects</div>
+    <input id="prj-search" class="search" type="search" spellcheck="false"
+           placeholder="Filter by name…">
+    <div id="prj-list" class="prj-list"></div>
+  </section>
+
+  <section id="view-detail" class="panel detail hidden">
+    <div class="panel-head">
+      <button id="btn-back" class="btn small">← Back</button>
+      <span id="prj-title" class="panel-title"></span>
+      <span id="prj-badge" class="pill hidden"></span>
+    </div>
+
+    <div class="detail-body">
+      <div class="detail-col">
+        <div class="dblock">
+          <div class="dblock-head">Description</div>
+          <textarea id="prj-desc" class="input note-editor" rows="3" spellcheck="false"></textarea>
+          <div class="dblock-actions">
+            <button id="btn-save-desc" class="btn small">Save description</button>
+            <button id="btn-toggle-complete" class="btn small">Mark completed</button>
+            <button id="btn-del" class="btn small danger">Delete project</button>
+          </div>
+        </div>
+
+        <div class="dblock">
+          <div class="dblock-head">Sources</div>
+          <div id="prj-sources" class="mini-list"></div>
+          <button id="btn-add-source" class="btn small">+ Add sources</button>
+        </div>
+      </div>
+
+      <div class="detail-col">
+        <div class="dblock">
+          <div class="dblock-head">Members</div>
+          <div id="prj-members" class="mini-list"></div>
+          <div class="member-add">
+            <input id="member-name" class="input" placeholder="member name" spellcheck="false">
+            <select id="member-role" class="input">
+              <option value="owner">owner</option>
+              <option value="maintainer">maintainer</option>
+              <option value="contributor" selected>contributor</option>
+              <option value="spectator">spectator</option>
+            </select>
+            <button id="btn-add-member" class="btn small">+ Add</button>
+          </div>
+          <p class="muted hint">No accounts yet — members are placeholders for
+            the future collaborative system. You are the <b>owner</b> of this project.</p>
+        </div>
+
+        <div class="dblock">
+          <div class="dblock-head">LaTeX editor <span class="muted">(placeholder — not synced)</span></div>
+          <textarea id="tex-editor" class="input note-editor mono" rows="12" spellcheck="false"
+                    placeholder="This is a local, unsynced placeholder for the future collaborative LaTeX editor.&#10;Your text is kept in this browser only (localStorage)."></textarea>
+          <p class="muted hint">Draft autosaved in this browser only. Nothing is
+            sent to the server.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="modal hidden" id="modal-new">
+  <div class="modal-box">
+    <div class="modal-head"><h3>New project</h3><button class="x" data-close="modal-new">×</button></div>
+    <div class="modal-body">
+      <label class="lbl">Name</label>
+      <input id="new-name" class="input" type="text" spellcheck="false" placeholder="e.g. Reading group: RL">
+      <label class="lbl">Description (optional)</label>
+      <textarea id="new-desc" class="input" rows="3" spellcheck="false"></textarea>
+      <div class="modal-actions">
+        <button id="new-submit" class="btn primary">Create</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="modal-add-src">
+  <div class="modal-box">
+    <div class="modal-head"><h3>Add sources to project</h3><button class="x" data-close="modal-add-src">×</button></div>
+    <div class="modal-body">
+      <input id="add-src-filter" class="input" type="search" placeholder="Filter sources…" spellcheck="false">
+      <div id="add-src-list" class="check-list"></div>
+      <div class="modal-actions">
+        <button id="add-src-submit" class="btn primary">Add selected</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="/static/projects.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+# KNDB configuration — loaded by backend/config.py at startup.
+#
+# Anything omitted falls back to the built-in defaults (see backend/config.py).
+# The file location can be overridden with the KNDB_CONFIG environment variable.
+# NOTE: other KNDB_* environment variables are no longer read for these values.
+#
+# If you put secrets here (e.g. a real API key), consider adding this file
+# to .gitignore so it never reaches version control.
+
+server:
+  host: 127.0.0.1
+  port: 5000
+  debug: false            # enables uvicorn auto-reload
+
+data:
+  dir: data               # relative to the project root, or an absolute path
+
+llm:
+  base_url: http://127.0.0.1:1234/v1   # OpenAI-compatible server
+  api_key: ""                          # leave empty for local servers
+  model: liquid/lfm2.5-1.2b          # model name sent in requests
+
+  retries: 3                           # transient-error retries (429/5xx/connection)
