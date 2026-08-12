@@ -64,7 +64,7 @@ async def probe() -> bool:
     client = get_client()
     try:
         r = await client.get("models", timeout=(10.0, 30.0))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _ready = False
         _last_error = str(e)
         return False
