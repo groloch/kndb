@@ -9,6 +9,9 @@ const S = {
   noteMode: "preview",
   noteDirty: false,
   saveTimer: null,
+  streaming: false,
+  qm: null,
+  qmEditId: null,
 };
 
 
@@ -33,7 +36,7 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function streamSSE(path, body) {
+function streamSSE(path, body, onToken) {
   return new Promise((resolve, reject) => {
     fetch(path, {
       method: "POST",
@@ -61,6 +64,7 @@ function streamSSE(path, body) {
             if (!line.startsWith("data:")) continue;
             let ev;
             try { ev = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
+            if (ev.type === "token" && onToken) onToken(ev.text || "");
             if (ev.type === "error") { reject(new Error(ev.error || "LLM task failed")); return; }
             if (ev.type === "done") { resolve(ev); return; }
           }
@@ -193,6 +197,7 @@ function renderDirectory() {
 async function selectSource(id, noteMode = "preview") {
   const s = S.sources.find(x => x.id === id);
   if (!s) return;
+  if (S.streaming) { toast("Wait for the summary to finish first", "warn"); return; }
   if (S.noteDirty) await saveNote();
   S.current = s;
   renderDirectory();
@@ -201,14 +206,13 @@ async function selectSource(id, noteMode = "preview") {
   await loadNote(s);
   S.noteMode = noteMode;
   applyNoteMode();
-  $("#meta-tags").value = s.tags || "";
   $("#meta-category").value = s.category || "";
   $("#res-footer").classList.remove("hidden");
 }
 
 function setToolbar(s) {
   const on = !!s;
-  ["btn-quiz-gen", "btn-quiz-play", "btn-summarize"].forEach(id => {
+  ["btn-quiz-gen", "btn-quiz-play", "btn-summarize", "btn-manage-tags", "btn-manage-quiz"].forEach(id => {
     $(`#${id}`).disabled = !on;
   });
 }
@@ -272,7 +276,7 @@ async function loadNote(s) {
 }
 
 function onNoteTyped() {
-  if (!S.current) return;
+  if (!S.current || S.streaming) return;
   S.noteDirty = true;
   $("#note-save-state").textContent = "unsaved…";
   clearTimeout(S.saveTimer);
@@ -343,11 +347,9 @@ $("#meta-save").addEventListener("click", async () => {
   try {
     const d = await api(`/api/source/${S.current.id}/meta`, {
       method: "POST",
-      body: { tags: $("#meta-tags").value, category: $("#meta-category").value },
+      body: { category: $("#meta-category").value },
     });
-    S.current.tags = d.tags;
     S.current.category = d.category;
-    await refreshDirectory();
     toast("Metadata saved", "ok");
   } catch (e) {
     toast("Failed to save metadata: " + e.message, "err");
@@ -402,24 +404,49 @@ $("#btn-summarize").addEventListener("click", () => openModal("#modal-summarize"
 
 $("#summarize-submit").addEventListener("click", async () => {
   if (!S.current) return;
-  const btn = $("#summarize-submit");
+  if (S.streaming) { toast("Already summarizing…", "warn"); return; }
   const body = {
     scope: $('input[name="su-scope"]:checked').value,
     length: $("#su-length").value,
     language: $("#su-language").value.trim() || "English",
   };
-  setBusy(btn, true, "Summarizing…");
+  closeModal("#modal-summarize");
+
+  await saveNote();
+  const base = $("#note-editor").value || "";
+  const editor = $("#note-editor");
+  const saveState = $("#note-save-state");
+
+  // Turn on notes preview and lock editing while the summary streams in.
+  S.streaming = true;
+  S.noteMode = "preview";
+  applyNoteMode();
+  editor.disabled = true;
+  saveState.textContent = "summarizing…";
+
+  let summary = "";
+  const paint = () => {
+    const preview = $("#note-preview");
+    preview.innerHTML = renderMarkdown(
+      base + (summary ? `\n\n---\n\n## Summary — streaming…\n\n${summary}` : ""));
+    preview.scrollTop = preview.scrollHeight;
+  };
+  paint();
+
   try {
-    await saveNote();
-    await streamSSE(`/api/summarize/${S.current.id}`, body);
-    closeModal("#modal-summarize");
+    await streamSSE(`/api/summarize/${S.current.id}`, body, tok => {
+      summary += tok;
+      paint();
+    });
+    await loadNote(S.current);  // reload the finalized notes (summary already appended)
     toast("Summary appended to your notes", "ok");
-    await loadNote(S.current);
-    applyNoteMode();
   } catch (e) {
+    if (summary) paint();  // keep whatever streamed so far visible
     toast("Summarize failed: " + e.message, "err", 10000);
   } finally {
-    setBusy(btn, false, "Summarize");
+    S.streaming = false;
+    editor.disabled = false;
+    saveState.textContent = "";
   }
 });
 
@@ -537,9 +564,10 @@ $("#note-editor").addEventListener("input", onNoteTyped);
 $("#note-editor").addEventListener("blur", () => { if (S.noteDirty) saveNote(); });
 
 document.addEventListener("keydown", e => {
+  if (e.key === "Escape") hideCtx();
   if (e.ctrlKey && e.key.toLowerCase() === "d") {
     e.preventDefault();
-    if (!S.current) return;
+    if (!S.current || S.streaming) return;
     S.noteMode = S.noteMode === "edit" ? "preview" : "edit";
     applyNoteMode();
   }
@@ -552,6 +580,253 @@ document.addEventListener("click", e => {
 $$(".modal").forEach(m => m.addEventListener("mousedown", e => {
   if (e.target === m) m.classList.add("hidden");
 }));
+
+/* ---------- Tags management ---------- */
+
+function currentTags() {
+  return (S.current ? (S.current.tags || "") : "").split(",").map(t => t.trim()).filter(Boolean);
+}
+
+function openTagsModal() {
+  if (!S.current) return;
+  renderTags();
+  openModal("#modal-tags");
+  setTimeout(() => $("#tag-input").focus(), 60);
+}
+
+function renderTags() {
+  const list = $("#tags-list");
+  const tags = currentTags();
+  if (!tags.length) {
+    list.innerHTML = '<p class="muted">No tags yet — add one below.</p>';
+  } else {
+    list.innerHTML = "";
+    for (const t of tags) {
+      const el = document.createElement("div");
+      el.className = "tag-chip";
+      el.innerHTML =
+        `<button class="tag-x" data-tag="${escapeHtml(t)}" title="Remove tag">×</button><span>@${escapeHtml(t)}</span>`;
+      list.appendChild(el);
+    }
+  }
+  $("#tag-input").value = "";
+}
+
+async function saveTags(tags) {
+  if (!S.current) return false;
+  const joined = tags.join(", ");
+  try {
+    await api(`/api/source/${S.current.id}/meta`, { method: "POST", body: { tags: joined } });
+    if (S.current) S.current.tags = joined;
+    await refreshDirectory();
+    renderTags();
+    return true;
+  } catch (e) {
+    toast("Failed to save tags: " + e.message, "err");
+    return false;
+  }
+}
+
+function addTagFromInput() {
+  const v = $("#tag-input").value.trim().replace(/^@/, "");
+  if (!v) return;
+  const tags = currentTags();
+  if (tags.some(t => t.toLowerCase() === v.toLowerCase())) {
+    toast("Tag already exists", "warn");
+    return;
+  }
+  saveTags([...tags, v]);
+}
+
+$("#btn-manage-tags").addEventListener("click", openTagsModal);
+$("#btn-open-tags").addEventListener("click", openTagsModal);
+$("#tag-add-btn").addEventListener("click", addTagFromInput);
+$("#tag-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); addTagFromInput(); }
+});
+$("#tags-list").addEventListener("click", e => {
+  const x = e.target.closest(".tag-x");
+  if (!x) return;
+  saveTags(currentTags().filter(t => t !== x.dataset.tag));
+});
+
+/* ---------- Quiz management ---------- */
+
+async function openQuizManager() {
+  if (!S.current) return;
+  S.qm = null;
+  S.qmEditId = null;
+  openModal("#modal-quiz-manage");
+  try {
+    S.qm = await api(`/api/quiz/${S.current.id}`);
+  } catch (e) {
+    $("#qm-list").innerHTML = `<p class="muted">Could not load quiz: ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  renderQuizList();
+  resetQuizForm();
+}
+
+function renderQuizList() {
+  const list = $("#qm-list");
+  const questions = (S.qm && S.qm.questions) || [];
+  if (!questions.length) {
+    list.innerHTML =
+      '<p class="muted">No questions yet — generate a quiz with “Generate quiz”, or add one below.</p>';
+    return;
+  }
+  list.innerHTML = "";
+  questions.forEach((q, i) => {
+    const el = document.createElement("div");
+    el.className = "qm-item";
+    el.dataset.qid = q.id;
+    const opts = (q.answers || []).map((a, idx) =>
+      `<span class="qm-opt${idx === q.answer_index ? " ok" : ""}">${escapeHtml(a)}${idx === q.answer_index ? " ✓" : ""}</span>`
+    ).join("");
+    el.innerHTML = `
+      <div class="qm-q"><strong>${i + 1}.</strong> ${escapeHtml(q.question)}</div>
+      <div class="qm-opts">${opts}</div>
+      <div class="qm-actions">
+        <button class="btn small" data-act="edit">Edit</button>
+        <button class="btn small danger" data-act="del">Delete</button>
+      </div>`;
+    list.appendChild(el);
+  });
+}
+
+function resetQuizForm() {
+  S.qmEditId = null;
+  $("#qm-question").value = "";
+  ["qm-a1", "qm-a2", "qm-a3", "qm-a4"].forEach(id => { $(`#${id}`).value = ""; });
+  $("#qm-correct").value = "1";
+  $("#qm-add-btn").textContent = "Add question";
+  $("#qm-cancel").classList.add("hidden");
+}
+
+function loadQuizForm(qid) {
+  const q = ((S.qm && S.qm.questions) || []).find(x => x.id === qid);
+  if (!q) return;
+  S.qmEditId = qid;
+  $("#qm-question").value = q.question;
+  (q.answers || []).forEach((a, i) => { if (i < 4) $(`#qm-a${i + 1}`).value = a; });
+  $("#qm-correct").value = String((q.answer_index ?? 0) + 1);
+  $("#qm-add-btn").textContent = "Save changes";
+  $("#qm-cancel").classList.remove("hidden");
+  $("#qm-question").focus();
+}
+
+async function refreshQuizManager() {
+  try {
+    S.qm = await api(`/api/quiz/${S.current.id}`);
+  } catch (_) {}
+  renderQuizList();
+  resetQuizForm();
+  refreshDirectory();
+}
+
+async function saveQuizForm() {
+  if (!S.current) return;
+  const question = $("#qm-question").value.trim();
+  const answers = [1, 2, 3, 4].map(i => $(`#qm-a${i}`).value.trim());
+  const ansCount = answers.filter(Boolean).length;
+  const answer_index = parseInt($("#qm-correct").value, 10) - 1;
+  if (!question) { toast("Enter a question", "warn"); return; }
+  if (ansCount < 2) { toast("Enter at least two answers", "warn"); return; }
+  if (answer_index >= ansCount) { toast("Correct answer must be one of the filled answers", "warn"); return; }
+  const btn = $("#qm-add-btn");
+  const editing = !!S.qmEditId;
+  setBusy(btn, true, "Saving…");
+  try {
+    if (editing) {
+      await api(`/api/quiz/${S.current.id}/questions/${encodeURIComponent(S.qmEditId)}`, {
+        method: "PUT", body: { question, answers, answer_index },
+      });
+    } else {
+      await api(`/api/quiz/${S.current.id}/questions`, {
+        method: "POST", body: { question, answers, answer_index },
+      });
+    }
+    await refreshQuizManager();
+    toast(editing ? "Question updated" : "Question added", "ok");
+  } catch (e) {
+    toast("Could not save question: " + e.message, "err");
+  } finally {
+    setBusy(btn, false, editing ? "Save changes" : "Add question");
+  }
+}
+
+$("#btn-manage-quiz").addEventListener("click", openQuizManager);
+$("#qm-add-btn").addEventListener("click", saveQuizForm);
+$("#qm-cancel").addEventListener("click", resetQuizForm);
+$("#qm-question").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); $("#qm-add-btn").click(); }
+});
+$("#qm-list").addEventListener("click", async e => {
+  const act = e.target.closest("[data-act]");
+  if (!act || !S.current) return;
+  const item = e.target.closest(".qm-item");
+  if (!item) return;
+  const qid = item.dataset.qid;
+  if (act.dataset.act === "del") {
+    if (!confirm("Delete this question and its stats?")) return;
+    try {
+      await api(`/api/quiz/${S.current.id}/questions/${encodeURIComponent(qid)}`, { method: "DELETE" });
+      await refreshQuizManager();
+      toast("Question deleted", "ok");
+    } catch (err) {
+      toast("Delete failed: " + err.message, "err");
+    }
+  } else if (act.dataset.act === "edit") {
+    loadQuizForm(qid);
+  }
+});
+
+/* ---------- Source context menu (right click) ---------- */
+
+function hideCtx() { $("#ctx-menu").classList.add("hidden"); }
+
+function showCtxMenu(x, y, s) {
+  const menu = $("#ctx-menu");
+  menu.innerHTML = "";
+  const items = [
+    { label: "Manage quiz…", danger: false },
+    { label: "Manage tags…", danger: false },
+    { label: "Delete source", danger: true },
+  ];
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.className = "ctx-item" + (it.danger ? " danger" : "");
+    b.textContent = it.label;
+    b.addEventListener("click", async () => {
+      hideCtx();
+      if (S.current && S.current.id !== s.id) await selectSource(s.id, "preview");
+      if (it.label === "Manage quiz…") openQuizManager();
+      else if (it.label === "Manage tags…") openTagsModal();
+      else deleteSource(s.id);
+    });
+    menu.appendChild(b);
+  }
+  menu.classList.remove("hidden");
+  const mw = menu.offsetWidth, mh = menu.offsetHeight;
+  if (x + mw > window.innerWidth - 8) x = Math.max(8, window.innerWidth - mw - 8);
+  if (y + mh > window.innerHeight - 8) y = Math.max(8, window.innerHeight - mh - 8);
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
+}
+
+document.addEventListener("contextmenu", e => {
+  const item = e.target.closest(".dir-item");
+  if (!item) { hideCtx(); return; }
+  e.preventDefault();
+  const s = S.sources.find(x => x.id === item.dataset.id);
+  if (!s) return;
+  if (!S.current || S.current.id !== s.id) selectSource(s.id, "preview");  // preload target
+  showCtxMenu(e.clientX, e.clientY, s);
+});
+
+document.addEventListener("click", e => {
+  if (!e.target.closest("#ctx-menu")) hideCtx();
+});
 
 let _searchTimer;
 $("#search").addEventListener("input", () => {

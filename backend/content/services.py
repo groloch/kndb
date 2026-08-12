@@ -195,6 +195,91 @@ async def record_answer(sid: str, qid: str, success: bool) -> dict:
     await store.save_stats(sid, stats)
     return q
 
+def _next_qid(questions: list) -> str:
+    used = {str(q.get("id")) for q in questions}
+    n = 1
+    while f"q{n}" in used:
+        n += 1
+    return f"q{n}"
+
+
+def _normalize_manual_question(question, answers, answer_index) -> dict:
+    question = (question or "").strip()
+    answers = [str(a).strip() for a in (answers or [])]
+    answers = [a for a in answers if a]
+    if not question:
+        raise ValueError("Question text cannot be empty.")
+    if len(answers) < 2:
+        raise ValueError("Provide at least two non-empty answers.")
+    try:
+        answer_index = int(answer_index)
+    except (TypeError, ValueError):
+        answer_index = 0
+    if not (0 <= answer_index < len(answers)):
+        raise ValueError("The correct-answer index is out of range.")
+    return {"question": question, "answers": answers, "answer_index": answer_index}
+
+
+async def add_quiz_question(sid: str, question: str, answers: list,
+                            answer_index: int = 0) -> dict:
+    quiz = await store.read_quiz(sid)
+    questions = quiz.setdefault("questions", [])
+    payload = _normalize_manual_question(question, answers, answer_index)
+    qid = _next_qid(questions)
+    q = {"id": qid, **payload}
+    questions.append(q)
+    quiz["updated_at"] = _local_now()
+    await store.save_quiz(sid, quiz)
+
+    stats = await store.read_stats(sid)
+    if not stats:
+        stats = {"num_questions": 0, "questions": {}, "date_added": _local_now(),
+                 "date_last_modified": _local_now()}
+    stats.setdefault("questions", {})[qid] = {
+        "times_played": 0, "times_successful": 0, "box": 0,
+        "next_review": "", "last_played": ""}
+    stats["num_questions"] = len(questions)
+    stats["date_last_modified"] = _local_now()
+    await store.save_stats(sid, stats)
+    return q
+
+
+async def update_quiz_question(sid: str, qid: str, question=None,
+                               answers=None, answer_index=None) -> dict:
+    quiz = await store.read_quiz(sid)
+    questions = quiz.get("questions", [])
+    q = next((x for x in questions if x.get("id") == qid), None)
+    if q is None:
+        raise KeyError(f"question {qid!r} not found in quiz")
+    payload = _normalize_manual_question(
+        question if question is not None else q.get("question", ""),
+        answers if answers is not None else q.get("answers", []),
+        answer_index if answer_index is not None else q.get("answer_index", 0),
+    )
+    q.update(payload)
+    quiz["updated_at"] = _local_now()
+    await store.save_quiz(sid, quiz)
+    return q
+
+
+async def delete_quiz_question(sid: str, qid: str) -> None:
+    quiz = await store.read_quiz(sid)
+    questions = quiz.get("questions", [])
+    remaining = [q for q in questions if q.get("id") != qid]
+    if len(remaining) == len(questions):
+        raise KeyError(f"question {qid!r} not found in quiz")
+    quiz["questions"] = remaining
+    quiz["updated_at"] = _local_now()
+    await store.save_quiz(sid, quiz)
+
+    stats = await store.read_stats(sid)
+    if stats:
+        stats.get("questions", {}).pop(qid, None)
+        stats["num_questions"] = len(remaining)
+        stats["date_last_modified"] = _local_now()
+        await store.save_stats(sid, stats)
+
+
 async def quiz_order(sid: str) -> list:
     quiz = await store.read_quiz(sid)
     stats = await store.read_stats(sid)

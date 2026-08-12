@@ -49,6 +49,47 @@ async def quiz_record(sid: str, body: Optional[dict] = None):
     q = await services.record_answer(sid, qid, bool(body.get("success")))
     return {"ok": True, "question": q}
 
+@router.post("/api/quiz/{sid}/questions")
+async def quiz_question_add(sid: str, body: Optional[dict] = None):
+    await get_source_or_404(sid)
+    body = body or {}
+    try:
+        q = await services.add_quiz_question(
+            sid,
+            question=body.get("question", ""),
+            answers=body.get("answers") or [],
+            answer_index=body.get("answer_index", 0),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "question": q}
+
+@router.put("/api/quiz/{sid}/questions/{qid}")
+async def quiz_question_update(sid: str, qid: str, body: Optional[dict] = None):
+    await get_source_or_404(sid)
+    body = body or {}
+    try:
+        q = await services.update_quiz_question(
+            sid, qid,
+            question=body.get("question"),
+            answers=body.get("answers"),
+            answer_index=body.get("answer_index"),
+        )
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "question": q}
+
+@router.delete("/api/quiz/{sid}/questions/{qid}")
+async def quiz_question_delete(sid: str, qid: str):
+    await get_source_or_404(sid)
+    try:
+        await services.delete_quiz_question(sid, qid)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True}
+
 @router.post("/api/summarize/{sid}")
 async def summarize(sid: str, body: Optional[dict] = None):
     await get_source_or_404(sid)

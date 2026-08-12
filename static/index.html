@@ -19,9 +19,9 @@
   <div class="top-actions">
     <button id="btn-import" class="btn">+ Import</button>
     <span class="sep"></span>
-    <button id="btn-quiz-gen" class="btn primary" disabled>Generate quiz</button>
+    <button id="btn-summarize" class="btn primary" disabled>Summarize</button>
     <button id="btn-quiz-play" class="btn" disabled>Play quiz</button>
-    <button id="btn-summarize" class="btn" disabled>Summarize</button>
+    <button id="btn-quiz-gen" class="btn" disabled>Generate quiz</button>
     <span id="llm-status" class="llm-status" title="">…</span>
   </div>
 </header>
@@ -46,7 +46,7 @@
       <div id="res-md" class="res-md prose hidden"></div>
     </div>
     <div id="res-footer" class="res-footer hidden">
-      <input id="meta-tags" class="input" placeholder="tags, comma, separated (search: @tag)">
+      <button id="btn-open-tags" class="btn small" title="Manage tags">Tags…</button>
       <input id="meta-category" class="input" placeholder="category / folder (e.g. math/analysis)">
       <button id="meta-save" class="btn small">Save meta</button>
     </div>
@@ -56,8 +56,10 @@
   <section id="panel-note" class="panel">
     <div class="panel-head">
       <span class="panel-title">Notes</span>
-      <span class="note-hint">Ctrl+D toggles preview</span>
+      <button id="btn-manage-tags" class="linkbtn" disabled title="Add or remove tags (@tag search)">Tags</button>
+      <button id="btn-manage-quiz" class="linkbtn" disabled title="View, add and edit quiz questions">Quiz</button>
       <span id="note-save-state" class="save-state"></span>
+      <span class="note-hint">Ctrl+D toggles preview</span>
     </div>
     <div class="note-wrap">
       <textarea id="note-editor" class="note-editor hidden" spellcheck="false"
@@ -137,6 +139,56 @@
     <div class="modal-body" id="quiz-body"></div>
   </div>
 </div>
+
+<div class="modal hidden" id="modal-tags">
+  <div class="modal-box">
+    <div class="modal-head"><h3>Tags</h3><button class="x" data-close="modal-tags">×</button></div>
+    <div class="modal-body">
+      <div id="tags-list" class="tags-list"></div>
+      <div class="tag-add">
+        <input id="tag-input" class="input" placeholder="new tag…" spellcheck="false">
+        <button id="tag-add-btn" class="btn primary">+ Add</button>
+      </div>
+      <div class="modal-actions">
+        <span class="hint">Tags are searchable in the directory with <b>@tag</b>.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="modal-quiz-manage">
+  <div class="modal-box wide">
+    <div class="modal-head"><h3>Quiz questions</h3><button class="x" data-close="modal-quiz-manage">×</button></div>
+    <div class="modal-body">
+      <div id="qm-list" class="qm-list"></div>
+      <div class="qm-add">
+        <div class="qm-add-head">Add a question</div>
+        <input id="qm-question" class="input" placeholder="Question text…" spellcheck="false">
+        <div class="qm-answers">
+          <input id="qm-a1" class="input" placeholder="Answer 1" spellcheck="false">
+          <input id="qm-a2" class="input" placeholder="Answer 2" spellcheck="false">
+          <input id="qm-a3" class="input" placeholder="Answer 3 (optional)" spellcheck="false">
+          <input id="qm-a4" class="input" placeholder="Answer 4 (optional)" spellcheck="false">
+        </div>
+        <div class="qm-controls">
+          <span class="lbl-q">Correct answer</span>
+          <select id="qm-correct" class="input">
+            <option value="1">Answer 1</option>
+            <option value="2">Answer 2</option>
+            <option value="3">Answer 3</option>
+            <option value="4">Answer 4</option>
+          </select>
+          <div class="qm-add-action">
+            <button id="qm-add-btn" class="btn primary">Add question</button>
+            <button id="qm-cancel" class="btn hidden">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="ctx-menu" class="ctx hidden"></div>
 
 <div id="toast" class="toast"></div>
 

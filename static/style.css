@@ -321,3 +321,58 @@ select.input { padding: 6px 8px; }
 .danger:hover:not(:disabled) { background: #fdf0f0; border-color: var(--err); }
 
 .pill.type-completed { background: #eef3ee; color: var(--ok); border-color: #cfe3d6; }
+
+/* --- tags manager --- */
+.linkbtn {
+  border: none; background: none; color: var(--accent);
+  font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: .2px;
+  cursor: pointer; padding: 2px 6px; border-radius: 5px;
+}
+.linkbtn:hover:not(:disabled) { background: #eef1fe; }
+.linkbtn:disabled { color: var(--muted); opacity: .5; cursor: default; }
+
+.tags-list { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0 2px; }
+.tag-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #f0f0ec; color: #6a6a63; border-radius: 20px;
+  padding: 4px 6px 4px 10px; font-size: 13px;
+}
+.tag-x { border: none; background: none; color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 0 2px; border-radius: 50%; }
+.tag-x:hover { color: var(--err); }
+.tag-add { display: flex; gap: 8px; margin-top: 10px; }
+.tag-add .input { flex: 1; }
+
+/* --- quiz manager --- */
+.qm-list { display: flex; flex-direction: column; gap: 10px; max-height: 38vh;
+  overflow-y: auto; margin: 10px 0 16px; padding-right: 2px; }
+.qm-item { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.qm-q { font-size: 14px; margin-bottom: 6px; }
+.qm-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.qm-opt { font-size: 12px; background: #f4f4f0; border-radius: 12px;
+  padding: 2px 9px; color: var(--muted); }
+.qm-opt.ok { background: #e7f7ee; color: #14663d; }
+.qm-actions { display: flex; gap: 6px; margin-top: 8px; }
+.qm-add { border-top: 1px solid var(--border); padding-top: 12px; }
+.qm-add-head { font-size: 12px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; }
+.qm-answers { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.qm-controls { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.lbl-q { font-size: 12px; color: var(--muted); }
+.qm-controls .input { width: 130px; }
+.qm-add-action { margin-left: auto; display: flex; gap: 8px; }
+
+/* --- source context menu --- */
+.ctx {
+  position: fixed; z-index: 90; min-width: 180px;
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: 8px; box-shadow: var(--shadow); padding: 4px;
+}
+.ctx-item {
+  display: block; width: 100%; text-align: left;
+  border: none; background: none; padding: 7px 10px; font-size: 13px;
+  border-radius: 5px; cursor: pointer; color: var(--text); white-space: nowrap;
+}
+.ctx-item:hover { background: #eef1fe; }
+.ctx-item.danger { color: var(--err); }
+.ctx-item.danger:hover { background: #fdf0f0; }

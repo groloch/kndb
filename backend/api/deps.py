@@ -20,7 +20,7 @@ async def get_project_or_404(pid: str) -> dict:
 def sse(events):
     async def gen():
         async for ev in events:
-            yield f"data: {json.dumps(ev, ensure_ascii=False)}\\n\\n"
+            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
 
     return gen()
 
