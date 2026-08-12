@@ -2,12 +2,14 @@ import asyncio
 import os
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import (APIRouter, Depends, File, Form, HTTPException, Request,
+                     UploadFile)
 from fastapi.responses import FileResponse
 
-from backend.api.deps import get_source_or_404
+from backend.api.deps import current_user, get_source_or_404, writable_project
+from backend.api.transfer_routes import mirror_to_workspace
 from backend.content import fetchers
-from backend.data import store
+from backend.data import notes, projects, store
 
 
 router = APIRouter()
@@ -16,15 +18,22 @@ MAX_UPLOAD = 300 * 1024 * 1024
 
 
 @router.get("/api/sources")
-async def list_sources(q: str = ""):
-    rows = await store.list_sources(q)
-    return {"ok": True, "sources": rows}
+async def list_sources(q: str = "", project: str = "",
+                       user: str = Depends(current_user)):
+    pid = project or await projects.personal_project_id(user)
+    return {"ok": True, "sources": await store.list_sources(q, pid=pid)}
 
 @router.post("/api/import")
-async def import_source(url: str = Form(""), file: Optional[UploadFile] = File(None)):
+async def import_source(request: Request, url: str = Form(""),
+                        file: Optional[UploadFile] = File(None),
+                        project: str = Form(""), folder: str = Form("")):
+    user = await current_user(request)
     url = (url or "").strip()
     if not url and file is None:
         raise HTTPException(400, "Provide a URL or a file to import")
+
+    pid = project or await projects.personal_project_id(user)
+    await writable_project(pid, user)
 
     if file is not None:
         try:
@@ -44,7 +53,9 @@ async def import_source(url: str = Form(""), file: Optional[UploadFile] = File(N
         title = os.path.splitext(name)[0]
         sid, spath = await store.create_source(title, stype, url="")
         await _write_upload(file, spath)
-        return {"ok": True, "id": sid, "title": title, "source_type": stype}
+        await _file_into(pid, sid, user, folder)
+        return {"ok": True, "id": sid, "title": title, "source_type": stype,
+                "project_id": pid}
 
     kind = fetchers.classify_url(url)
     try:
@@ -55,12 +66,16 @@ async def import_source(url: str = Form(""), file: Optional[UploadFile] = File(N
     try:
         existing = await store.find_by_url(info.get("url") or url)
         if existing:
+            added = await _file_into(pid, existing["id"], user, folder,
+                                     seed=info.get("seed", ""))
             return {
                 "ok": True,
                 "id": existing["id"],
                 "title": existing["title"],
                 "source_type": existing["source_type"],
                 "duplicate": True,
+                "already_here": not added,
+                "project_id": pid,
             }
         sid, spath = await store.create_source(
             info["title"],
@@ -73,9 +88,27 @@ async def import_source(url: str = Form(""), file: Optional[UploadFile] = File(N
             await asyncio.to_thread(_write_text, spath, content)
         else:
             await asyncio.to_thread(_write_bytes, spath, content)
+        await _file_into(pid, sid, user, folder, seed=info.get("seed", ""))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(500, f"Storing failed: {e}")
-    return {"ok": True, "id": sid, "title": info["title"], "source_type": info["source_type"]}
+    return {"ok": True, "id": sid, "title": info["title"],
+            "source_type": info["source_type"], "project_id": pid}
+
+async def _file_into(pid: str, sid: str, user: str, folder: str,
+                     seed: str = "") -> bool:
+    added = await projects.add_source(pid, sid, folder=folder, added_by=user)
+    if added:
+        caps = await projects.get_capabilities(pid)
+        row = await store.get_source(sid)
+        if row and not caps["multi_notes"]:
+            await notes.ensure_single(
+                pid, sid, author=user,
+                seed_content=store.build_note_seed(
+                    row["title"], row["source_type"], row["url"], seed))
+    await mirror_to_workspace(user, sid, pid)
+    return added
 
 @router.get("/api/source/{sid}/content")
 async def source_content(sid: str):
@@ -92,11 +125,13 @@ async def source_content(sid: str):
 async def source_meta(sid: str, body: Optional[dict] = None):
     row = await get_source_or_404(sid)
     body = body or {}
-    title = (body.get("title") or row["title"]).strip()
-    tags = (body.get("tags") or "").strip()
-    category = (body.get("category") or "").strip()
-    await store.update_meta(sid, title=title, tags=tags, category=category)
-    return {"ok": True, "id": sid, "title": title, "tags": tags, "category": category}
+    fields = {k: str(body[k] or "").strip()
+              for k in ("title", "tags", "category") if k in body}
+    if fields.get("title") == "":
+        del fields["title"]          # a source always keeps a title
+    await store.update_meta(sid, **fields)
+    return {"ok": True, "id": sid, **{k: fields.get(k, row[k])
+                                      for k in ("title", "tags", "category")}}
 
 @router.delete("/api/source/{sid}")
 async def source_delete(sid: str):
@@ -106,19 +141,32 @@ async def source_delete(sid: str):
     return {"ok": True}
 
 @router.get("/api/note/{sid}")
-async def get_note(sid: str):
+async def get_note(sid: str, user: str = Depends(current_user)):
     row = await get_source_or_404(sid)
-    return {"ok": True, "content": row["notes"]}
+    pid = await projects.personal_project_id(user)
+    page = await notes.ensure_single(
+        pid, sid, author=user,
+        seed_content=store.build_note_seed(row["title"], row["source_type"],
+                                           row["url"]))
+    return {"ok": True, "content": page["content"], "note_id": page["id"],
+            "version": page["version"], "blame": page["blame"]}
 
 @router.put("/api/note/{sid}")
-async def put_note(sid: str, body: Optional[dict] = None):
+async def put_note(sid: str, body: Optional[dict] = None,
+                   user: str = Depends(current_user)):
     await get_source_or_404(sid)
     body = body or {}
     content = body.get("content")
     if content is None:
         raise HTTPException(400, "missing content")
-    await store.save_note(sid, content)
-    return {"ok": True}
+    pid = await projects.personal_project_id(user)
+    page = await notes.ensure_single(pid, sid, author=user)
+    try:
+        saved = await notes.save(page["id"], content, author=user, role="owner",
+                                 base_version=body.get("base_version"))
+    except notes.NoteConflict as e:
+        raise HTTPException(409, str(e)) from e
+    return {"ok": True, "note_id": saved["id"], "version": saved["version"]}
 
 def _write_text(path: str, content: str) -> None:
     with open(path, "w", encoding="utf-8") as f:

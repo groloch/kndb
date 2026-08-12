@@ -1,8 +1,8 @@
 import json
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
-from backend.data import projects, store
+from backend.data import notes, projects, store, users
 
 
 async def get_source_or_404(sid: str) -> dict:
@@ -15,6 +15,31 @@ async def get_project_or_404(pid: str) -> dict:
     p = await projects.get_project(pid)
     if not p:
         raise HTTPException(404, f"project {pid} not found")
+    return p
+
+async def get_note_or_404(nid: str) -> dict:
+    n = await notes.get(nid)
+    if not n:
+        raise HTTPException(404, f"note {nid} not found")
+    return n
+
+async def current_user(request: Request) -> str:
+    name = (request.headers.get("X-KNDB-User")
+            or request.cookies.get("kndb_user") or "").strip()
+    return (await users.ensure(name))["name"]
+
+async def require_role(pid: str, user: str, *allowed: str) -> str:
+    role = await projects.member_role(pid, user)
+    if role is None:
+        raise HTTPException(403, "you are not a member of this project")
+    if allowed and role not in allowed:
+        raise HTTPException(
+            403, f"this action needs {' or '.join(allowed)}; you are {role}")
+    return role
+
+async def writable_project(pid: str, user: str) -> dict:
+    p = await get_project_or_404(pid)
+    await require_role(pid, user, "owner", "maintainer", "contributor")
     return p
 
 def sse(events):

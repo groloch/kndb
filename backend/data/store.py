@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import secrets
@@ -29,25 +28,6 @@ def make_id() -> str:
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
-def _loads(s: str | None, default=None):
-    if not s:
-        return default
-    try:
-        return json.loads(s)
-    except (TypeError, ValueError):
-        return default
-
-def default_quiz(sid: str) -> dict:
-    return {"source_id": sid, "updated_at": _ts(), "questions": []}
-
-def new_stats(title: str, source_type: str, tags: str, category: str, url: str) -> dict:
-    now = _ts()
-    return {
-        "title": title, "source_type": source_type, "tags": tags,
-        "category": category, "url": url, "date_added": now,
-        "date_last_modified": now, "num_questions": 0, "questions": {},
-    }
-
 def build_note_seed(title: str, source_type: str, url: str, seed: str = "") -> str:
     lines = [f"# {title}", ""]
     if url:
@@ -66,19 +46,16 @@ def _row_to_dict(src: Source) -> dict:
         "tags": src.tags,
         "category": src.category,
         "fetched_at": src.fetched_at,
-        "notes": src.notes or "",
-        "quiz": _loads(src.quiz, default_quiz(src.id)),
-        "stats": _loads(src.stats, {}),
     }
 
-def to_public(row: dict) -> dict:
-    st = row["stats"] or {}
+def to_public(row: dict, stats: dict | None = None) -> dict:
+    st = stats or {}
     return {
         "id": row["id"], "title": row["title"], "source_type": row["source_type"],
         "url": row["url"], "tags": row["tags"], "category": row["category"],
         "fetched_at": row["fetched_at"],
         "num_questions": st.get("num_questions", 0),
-        "date_added": st.get("date_added", ""),
+        "date_added": st.get("date_added", row["fetched_at"]),
     }
 
 def _matches(row: dict, tags: list, terms: list) -> bool:
@@ -118,14 +95,21 @@ async def find_by_url(url: str) -> dict | None:
         src = (await s.execute(select(Source).where(Source.url == url))).scalar_one_or_none()
         return _row_to_dict(src) if src else None
 
-async def list_sources(q: str = "") -> list:
+async def list_sources(q: str = "", pid: str = "") -> list:
     tags, terms, projs = _parse_query(q)
     async with db.session() as s:
         rows = [_row_to_dict(x) for x in (await s.execute(select(Source))).scalars().all()]
+    if pid:
+        allowed = {l["source_id"] for l in await projects.source_links(pid)}
+        rows = [r for r in rows if r["id"] in allowed]
     if projs:
         allowed = await projects.source_ids_for_project_terms(projs)
         rows = [r for r in rows if r["id"] in allowed]
-    return [to_public(r) for r in rows if _matches(r, tags, terms)]
+    hits = [r for r in rows if _matches(r, tags, terms)]
+    if not pid:
+        return [to_public(r) for r in hits]
+    from . import quiz as quiz_store
+    return [to_public(r, await quiz_store.read_stats(pid, r["id"])) for r in hits]
 
 async def create_source(title: str, source_type: str, url: str = "",
                         tags: str = "", category: str = "", seed: str = "") -> tuple:
@@ -143,10 +127,6 @@ async def create_source(title: str, source_type: str, url: str = "",
     src = Source(
         id=sid, title=title, source_type=source_type, source_path=rel,
         url=url, tags=tags, category=category, fetched_at=now,
-        notes=build_note_seed(title, source_type, url, seed),
-        quiz=json.dumps(default_quiz(sid), ensure_ascii=False),
-        stats=json.dumps(new_stats(title, source_type, tags, category, url),
-                         ensure_ascii=False),
     )
     async with db.session() as s:
         s.add(src)
@@ -160,21 +140,16 @@ async def bulk_restore(*, id: str, title: str, source_type: str, source_path: st
     """One-time migration helper: insert a fully-populated row verbatim."""
     if not fetched_at:
         fetched_at = _ts()
-    if not quiz:
-        quiz = json.dumps(default_quiz(id), ensure_ascii=False)
-    if not stats:
-        stats = json.dumps({}, ensure_ascii=False)
     src = Source(
         id=id, title=title, source_type=source_type, source_path=source_path,
         url=url, tags=tags, category=category, fetched_at=fetched_at,
-        notes=notes or "", quiz=quiz, stats=stats,
+        notes=notes or "", quiz=quiz or "", stats=stats or "",
     )
     async with db.session() as s:
         s.add(src)
         await s.commit()
 
 async def update_meta(sid: str, title=None, tags=None, category=None) -> None:
-    now = _ts()
     async with db.session() as s:
         src = (await s.execute(select(Source).where(Source.id == sid))).scalar_one_or_none()
         if src is None:
@@ -185,15 +160,6 @@ async def update_meta(sid: str, title=None, tags=None, category=None) -> None:
             src.tags = tags
         if category is not None:
             src.category = category
-        st = _loads(src.stats, {})
-        if title is not None:
-            st["title"] = title
-        if tags is not None:
-            st["tags"] = tags
-        if category is not None:
-            st["category"] = category
-        st["date_last_modified"] = now
-        src.stats = json.dumps(st, ensure_ascii=False)
         await s.commit()
 
 async def delete_source(sid: str) -> None:
@@ -209,39 +175,3 @@ async def delete_source(sid: str) -> None:
             os.remove(row["source_path"])
         except OSError:
             pass
-
-async def save_note(sid: str, content: str) -> None:
-    now = _ts()
-    async with db.session() as s:
-        src = (await s.execute(select(Source).where(Source.id == sid))).scalar_one_or_none()
-        if src is None:
-            raise KeyError(f"source {sid!r} not found")
-        src.notes = content
-        st = _loads(src.stats, {})
-        st["date_last_modified"] = now
-        src.stats = json.dumps(st, ensure_ascii=False)
-        await s.commit()
-
-async def read_quiz(sid: str) -> dict:
-    row = await get_source(sid)
-    return row["quiz"] if row else default_quiz(sid)
-
-async def save_quiz(sid: str, quiz: dict) -> None:
-    async with db.session() as s:
-        src = (await s.execute(select(Source).where(Source.id == sid))).scalar_one_or_none()
-        if src is None:
-            raise KeyError(f"source {sid!r} not found")
-        src.quiz = json.dumps(quiz, ensure_ascii=False)
-        await s.commit()
-
-async def read_stats(sid: str) -> dict:
-    row = await get_source(sid)
-    return row["stats"] if row else {}
-
-async def save_stats(sid: str, stats: dict) -> None:
-    async with db.session() as s:
-        src = (await s.execute(select(Source).where(Source.id == sid))).scalar_one_or_none()
-        if src is None:
-            raise KeyError(f"source {sid!r} not found")
-        src.stats = json.dumps(stats, ensure_ascii=False)
-        await s.commit()

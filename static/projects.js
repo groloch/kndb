@@ -1,50 +1,8 @@
 "use strict";
 
-const $ = (s, el = document) => el.querySelector(s);
-const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+/* Project list page. Shared helpers come from common.js, which loads first. */
 
 const S = { projects: [] };
-
-async function api(path, opts = {}) {
-  const init = { headers: {}, ...opts };
-  if (init.body && !(init.body instanceof FormData) && typeof init.body !== "string") {
-    init.headers["Content-Type"] = "application/json";
-    init.body = JSON.stringify(init.body);
-  }
-  const res = await fetch(path, init);
-  let data = null;
-  try { data = await res.json(); } catch (_) {}
-  if (!res.ok || (data && data.ok === false)) {
-    throw new Error((data && data.error) || `HTTP ${res.status}`);
-  }
-  return data;
-}
-
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, c => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[c]));
-}
-
-let _toastTimer;
-function toast(msg, kind = "info", ms = 4200) {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.className = "toast show " + kind;
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => { t.className = "toast"; }, ms);
-}
-
-function modalEl(id) { return $(id.startsWith("#") ? id : `#${id}`); }
-function openModal(id) { modalEl(id).classList.remove("hidden"); }
-function closeModal(id) { modalEl(id).classList.add("hidden"); }
-
-function fmtDate(s) {
-  if (!s) return "";
-  const d = new Date(String(s).length === 10 ? Number(s) * 1000 : s);
-  if (isNaN(d)) return "";
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
 
 async function refreshProjects() {
   const q = $("#prj-search").value.trim();
@@ -122,4 +80,4 @@ $$(".modal").forEach(m => m.addEventListener("mousedown", e => {
   if (e.target === m) m.classList.add("hidden");
 }));
 
-refreshProjects();
+initIdentity().then(refreshProjects);

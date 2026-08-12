@@ -62,6 +62,10 @@ body {
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
 .btn.small { padding: 4px 10px; font-size: 12px; }
+/* Reserved for the button that destroys something, so a confirm dialog reads
+   the same way everywhere: the red one is the one you cannot undo. */
+.btn.danger { background: var(--err); border-color: var(--err); color: #fff; }
+.btn.danger:hover:not(:disabled) { background: #bd3535; border-color: #bd3535; }
 
 .main { flex: 1; display: flex; min-height: 0; }
 
@@ -100,20 +104,6 @@ body.resizing iframe { pointer-events: none; }
 .search:focus { border-color: var(--accent); }
 
 .dir-list { flex: 1; overflow-y: auto; padding: 6px 8px 12px; }
-.dir-item {
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  margin-bottom: 3px;
-}
-.dir-item:hover { background: #f4f4f0; }
-.dir-item.active { background: #eef1fe; border-color: #d6dcf9; }
-.dir-item-top { display: flex; align-items: center; gap: 8px; }
-.dir-title { flex: 1; font-size: 13px; font-weight: 500;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dir-sub { margin-top: 3px; display: flex; align-items: center; gap: 4px;
-  flex-wrap: wrap; }
 .cat { font-size: 11px; color: var(--muted); }
 .qcount { margin-left: auto; font-size: 11px; color: var(--muted); }
 .del {
@@ -149,7 +139,8 @@ body.resizing iframe { pointer-events: none; }
 }
 .res-footer .input { flex: 1; min-width: 0; }
 
-.note-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.note-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column;
+  position: relative; }
 .note-editor {
   flex: 1; border: 0; resize: none; outline: none;
   padding: 14px 18px;
@@ -208,6 +199,7 @@ select.input { padding: 6px 8px; }
   display: flex; flex-direction: column;
 }
 .modal-box.wide { width: min(720px, calc(100vw - 40px)); }
+.modal-box.narrow { width: min(430px, calc(100vw - 40px)); }
 .modal-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 14px 18px 10px; border-bottom: 1px solid var(--border);
@@ -223,6 +215,9 @@ select.input { padding: 6px 8px; }
   display: flex; align-items: center; gap: 12px; margin-top: 16px;
 }
 .modal-actions .hint { flex: 1; font-size: 12px; color: var(--muted); }
+/* confirmModal: the question, then what it costs. */
+.ask-body { margin: 10px 0 0; font-size: 14px; }
+.ask-hint { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; }
 .or { text-align: center; color: var(--muted); font-size: 12px; margin: 12px 0; }
 
 .seg { display: flex; gap: 8px; margin-top: 4px; }
@@ -322,15 +317,124 @@ select.input { padding: 6px 8px; }
 
 .pill.type-completed { background: #eef3ee; color: var(--ok); border-color: #cfe3d6; }
 
-/* --- tags manager --- */
-.linkbtn {
-  border: none; background: none; color: var(--accent);
-  font-size: 12px; font-weight: 400; text-transform: none; letter-spacing: .2px;
-  cursor: pointer; padding: 2px 6px; border-radius: 5px;
-}
-.linkbtn:hover:not(:disabled) { background: #eef1fe; }
-.linkbtn:disabled { color: var(--muted); opacity: .5; cursor: default; }
+/* --- dev-mode identity switcher --- */
+.user-switch { display: flex; align-items: center; gap: 4px; }
+.user-switch select { padding: 4px 6px; font-size: 12px; max-width: 140px; }
+.head-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+  flex: 0 0 auto; }
+
+/* --- library tree --- */
+.tree-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px 5px 6px; border-radius: 5px; cursor: pointer;
+  border: 1px solid transparent; font-size: 13px;
+}
+.tree-row:hover { background: #f4f4f0; }
+.tree-row.active { background: #eef1fe; border-color: #d6dcf9; }
+.tree-row .tree-name { flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-row.folder .tree-name { font-weight: 600; }
+.tree-row .twisty { width: 12px; color: var(--muted); font-size: 10px;
+  text-align: center; }
+.tree-row .tree-icon { font-size: 12px; opacity: .75; }
+.tree-row .del { opacity: 0; }
+.tree-row:hover .del { opacity: 1; }
+
+/* The unfolded half of a source row: tags, category and quiz count. Row and
+   tag line are two elements but one box, so the radius, the border and the
+   selection highlight are shared between them. */
+.tree-detail {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 1px 8px 5px; cursor: pointer;
+  border: 1px solid transparent; border-top: none; border-radius: 0 0 5px 5px;
+}
+.tree-row.source.unfolded { border-bottom: none; border-radius: 5px 5px 0 0; }
+.tree-row.source.unfolded:hover + .tree-detail,
+.tree-detail:hover,
+.tree-row.source.unfolded:has(+ .tree-detail:hover) { background: #f4f4f0; }
+.tree-detail.active,
+.tree-row.source.unfolded.active:has(+ .tree-detail) { background: #eef1fe; }
+.tree-detail.active { border-color: #d6dcf9; border-top: none; }
+.tree-none { font-size: 11px; }
+
+/* --- drag & drop filing --- */
+.tree-row[draggable="true"] { cursor: grab; }
+.tree-row.dragging { opacity: .4; }
+/* Inset rather than added, so rows do not shift as the highlight follows the
+   pointer down the tree. */
+.tree-row.drop-into {
+  background: #eef1fe;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.dir-list.drop-root { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 6px; }
+
+/* --- note page tabs --- */
+.note-tabs {
+  display: flex; align-items: center; gap: 2px; overflow-x: auto;
+  padding: 6px 8px 0; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+}
+.note-tab {
+  display: flex; align-items: center; gap: 6px;
+  appearance: none; border: 1px solid transparent; border-bottom: none;
+  background: none; cursor: pointer;
+  padding: 5px 10px; border-radius: 5px 5px 0 0;
+  font-size: 12px; color: var(--muted); white-space: nowrap;
+}
+.note-tab:hover { background: #f2f2ee; color: var(--text); }
+.note-tab.active { background: #fff; border-color: var(--border);
+  color: var(--text); font-weight: 600; }
+.note-tab.add { font-size: 14px; padding: 4px 9px; }
+.note-tab .del { opacity: 0; font-size: 13px; }
+.note-tab:hover .del, .note-tab.active .del { opacity: 1; }
+.note-tab.active .note-tab-name { cursor: text; }
+.note-tab.renaming { background: #fff; }
+.note-tab.renaming .note-tab-name {
+  outline: none; background: #eef1fe; border-radius: 3px;
+  padding: 0 3px; margin: 0 -3px; min-width: 20px;
+}
+
+/* --- blame gutter --- */
+.blame-gutter {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+  overflow: hidden; z-index: 2; pointer-events: none;
+}
+.blame-track { pointer-events: auto; }
+.blame-seg { width: 100%; opacity: .85; }
+.blame-seg:hover { opacity: 1; }
+
+.blame-legend {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  padding: 6px 12px; border-bottom: 1px solid var(--border);
+  font-size: 11px; color: var(--muted); flex: 0 0 auto;
+}
+.legend-item { display: flex; align-items: center; gap: 5px; }
+
+.note-foot { display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px 5px 12px; font-size: 11px;
+  border-top: 1px solid var(--border); flex: 0 0 auto; }
+.foot-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+
+/* Hidden twin of the editor: measures how tall each logical line renders
+   once wrapped, so blame stripes line up with the text they describe. */
+.note-mirror {
+  position: absolute; top: 0; left: 0; z-index: -1;
+  visibility: hidden; pointer-events: none;
+  white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word;
+}
+
+.send-preview {
+  max-height: 130px; overflow: auto; margin: 8px 0 12px;
+  padding: 8px 10px; background: #f7f7f4; border: 1px solid var(--border);
+  border-radius: 6px; font: 12px/1.6 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap;
+}
+.check-row.target { width: 100%; text-align: left; border: 1px solid transparent;
+  background: none; font-size: 13px; font-family: inherit; }
+.check-row.target:hover { border-color: #d6dcf9; }
+
+/* --- tags manager --- */
 .tags-list { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0 2px; }
 .tag-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -341,6 +445,7 @@ select.input { padding: 6px 8px; }
   font-size: 14px; line-height: 1; padding: 0 2px; border-radius: 50%; }
 .tag-x:hover { color: var(--err); }
 .tag-add { display: flex; gap: 8px; margin-top: 10px; }
+.tag-owner { font-size: 12px; margin: 10px 0 0; }
 .tag-add .input { flex: 1; }
 
 /* --- quiz manager --- */

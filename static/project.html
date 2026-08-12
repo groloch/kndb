@@ -18,6 +18,7 @@
   </nav>
   <div class="top-actions">
     <span id="prj-badge" class="pill type-completed hidden">completed</span>
+    <span id="user-switch" class="user-switch"></span>
     <a href="/projects" class="btn small">← All projects</a>
   </div>
 </header>
@@ -72,11 +73,15 @@
       <div class="panel-head">
         <span>Library</span>
         <span id="dir-count" class="muted" style="text-transform:none;"></span>
-        <button id="btn-add-source" class="btn small" style="margin-left:auto;">+ Add</button>
+        <span class="head-actions">
+          <button id="btn-import" class="btn small" title="Import a source into this project">+ Import</button>
+          <button id="btn-new-folder" class="btn small" title="New folder">+ Folder</button>
+          <button id="btn-new-note" class="btn small" title="New standalone note">+ Note</button>
+        </span>
       </div>
       <input id="search" class="search" type="search" spellcheck="false"
-             placeholder="Filter this library…">
-      <div id="dir-list" class="dir-list"></div>
+             placeholder="Filter this library…  @tag">
+      <div id="dir-list" class="dir-list tree"></div>
     </section>
     <div class="splitter" data-split="dir"></div>
 
@@ -84,10 +89,14 @@
       <div class="panel-head">
         <span id="res-title" class="panel-title">Resource</span>
         <span id="res-meta" class="pill hidden"></span>
+        <span class="head-actions">
+          <button id="btn-edit-tags" class="btn small" disabled
+                  title="Add or remove tags (@tag search)">Edit tags</button>
+        </span>
       </div>
       <div id="res-body" class="res-body">
         <div id="res-empty" class="empty">Select a source from the library to read it and<br>
-          edit the shared notes next to it.</div>
+          take notes on it next to it.</div>
         <iframe id="res-frame" class="res-frame hidden" sandbox="allow-same-origin allow-scripts"></iframe>
         <div id="res-md" class="res-md prose hidden"></div>
       </div>
@@ -95,17 +104,24 @@
     <div class="splitter" data-split="res"></div>
 
     <section id="panel-note" class="panel">
-      <div class="panel-head">
-        <span class="panel-title">Notes</span>
-        <span id="note-save-state" class="save-state"></span>
-        <span class="note-hint">Ctrl+D toggles preview · notes are shared with your personal space</span>
-      </div>
+      <div id="note-tabs" class="note-tabs hidden"></div>
+      <div id="blame-legend" class="blame-legend hidden"></div>
       <div class="note-wrap">
+        <div id="blame-gutter" class="blame-gutter hidden"></div>
         <textarea id="note-editor" class="note-editor hidden" spellcheck="false"
-                  placeholder="Write shared notes in Markdown for this source…"></textarea>
+                  placeholder="Write notes in Markdown for this source…"></textarea>
         <div id="note-preview" class="note-preview prose hidden">
           <p class="muted">Select a source in the library to read and edit its notes.</p>
         </div>
+        <div id="note-mirror" class="note-mirror" aria-hidden="true"></div>
+      </div>
+      <div class="note-foot">
+        <span id="note-hint" class="muted">Ctrl+D toggles preview</span>
+        <span id="note-save-state" class="save-state"></span>
+        <span class="foot-actions">
+          <button id="btn-send" class="btn small" title="Send the selected text elsewhere">Send to…</button>
+          <button id="btn-import-notes" class="btn small" title="Import a note page from another project">Import page…</button>
+        </span>
       </div>
     </section>
   </div>
@@ -162,13 +178,36 @@
 
 </main>
 
-<!-- Add sources to project modal -->
+<!-- Import a source into this project -->
+<div class="modal hidden" id="modal-import">
+  <div class="modal-box">
+    <div class="modal-head"><h3>Import into this project</h3><button class="x" data-close="modal-import">×</button></div>
+    <div class="modal-body">
+      <label class="lbl">From a link</label>
+      <input id="imp-url" class="input" type="url" spellcheck="false"
+             placeholder="arXiv / Hugging Face / any web page or PDF URL">
+      <label class="lbl">…or upload a file</label>
+      <input id="imp-file" class="input" type="file" accept=".pdf,.md,.markdown">
+      <label class="lbl">Folder (optional)</label>
+      <input id="imp-folder" class="input" type="text" spellcheck="false"
+             placeholder="chapter/one">
+      <div class="modal-actions">
+        <button id="btn-add-existing" class="btn small">Add from your workspace…</button>
+        <button id="imp-submit" class="btn primary">Import</button>
+      </div>
+      <p class="muted hint">Already-known links are reused rather than downloaded twice.
+        Imports are also copied into your personal workspace unless you turned that off.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Add existing sources from your workspace -->
 <div class="modal hidden" id="modal-add-src">
   <div class="modal-box">
-    <div class="modal-head"><h3>Add sources to project</h3><button class="x" data-close="modal-add-src">×</button></div>
+    <div class="modal-head"><h3>Add from your workspace</h3><button class="x" data-close="modal-add-src">×</button></div>
     <div class="modal-body">
-      <p class="muted" style="margin-top:8px;">Pick from your personal library. Notes and documents stay
-        shared between the two spaces.</p>
+      <p class="muted" style="margin-top:8px;">The document itself is shared, not copied.
+        Notes stay separate: this project gets its own pages.</p>
       <input id="add-src-filter" class="input" type="search" placeholder="Filter sources…" spellcheck="false">
       <div id="add-src-list" class="check-list"></div>
       <div class="modal-actions">
@@ -178,9 +217,36 @@
   </div>
 </div>
 
+<!-- Send a selection somewhere else -->
+<div class="modal hidden" id="modal-send">
+  <div class="modal-box">
+    <div class="modal-head"><h3>Send selection to…</h3><button class="x" data-close="modal-send">×</button></div>
+    <div class="modal-body">
+      <pre id="send-preview" class="send-preview"></pre>
+      <div id="send-targets" class="check-list"></div>
+      <p class="muted hint">Workspaces keep one note per source, so snippets are appended
+        to it — several pages can be gathered into one. Authorship travels with the text.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Import a note page from another project -->
+<div class="modal hidden" id="modal-import-notes">
+  <div class="modal-box">
+    <div class="modal-head"><h3>Import a note page</h3><button class="x" data-close="modal-import-notes">×</button></div>
+    <div class="modal-body">
+      <div id="import-notes-list" class="check-list"></div>
+      <p class="muted hint">The page is copied, not linked — editing it here never touches
+        the original.</p>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<script src="/static/common.js"></script>
+<script src="/static/tree.js"></script>
 <script src="/static/project.js"></script>
 </body>
 </html>

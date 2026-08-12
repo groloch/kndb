@@ -2,6 +2,8 @@ import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 
+from ..data import notes as note_store
+from ..data import quiz as quiz_store
 from ..data import store
 from ..integrations import llm
 
@@ -16,11 +18,11 @@ def _now() -> str:
 def _local_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
-async def material_for(scope: str, row: dict):
+async def material_for(scope: str, row: dict, notes_text: str = ""):
     """Return ``(notes_text, document_text)`` depending on the requested scope."""
     notes, doc = "", ""
     if scope in ("notes", "both"):
-        notes = row.get("notes") or ""
+        notes = notes_text or ""
     if scope in ("document", "both"):
         doc = await document_text(row)
     return notes, doc
@@ -130,14 +132,15 @@ def _init_question_stats(stats: dict, questions: list) -> None:
     for q in questions:
         stats["questions"].setdefault(q["id"], dict(base))
 
-async def stream_quiz(sid: str, scope: str = "both", num_questions: int = 5,
+async def stream_quiz(pid: str, sid: str, scope: str = "both", num_questions: int = 5,
                       difficulty: str = "medium", language: str = "English"):
     try:
         row = await store.get_source(sid)
         if not row:
             raise ValueError("source not found")
         num_questions = max(1, min(int(num_questions), 20))
-        notes, doc = await material_for(scope, row)
+        notes, doc = await material_for(scope, row,
+                                        await note_store.combined_text(pid, sid))
         _check_material(scope, notes, doc)
 
         instructions = (f"Create exactly {num_questions} multiple-choice questions "
@@ -161,19 +164,20 @@ async def stream_quiz(sid: str, scope: str = "both", num_questions: int = 5,
             yield {"type": "token", "text": token}
 
         questions = _normalize_questions(llm.extract_json(text))
-        await store.save_quiz(sid, {
+        await quiz_store.save_quiz(pid, sid, {
             "source_id": sid, "updated_at": _local_now(), "questions": questions,
         })
-        stats = await store.read_stats(sid)
-        if stats:
-            _init_question_stats(stats, questions)
-            await store.save_stats(sid, stats)
+        stats = await quiz_store.read_stats(pid, sid) or quiz_store.new_stats(
+            row["title"], row["source_type"], row["tags"], row["category"], row["url"])
+        stats.setdefault("questions", {})
+        _init_question_stats(stats, questions)
+        await quiz_store.save_stats(pid, sid, stats)
         yield {"type": "done", "questions": len(questions)}
     except Exception as e:
         yield {"type": "error", "error": str(e)}
 
-async def record_answer(sid: str, qid: str, success: bool) -> dict:
-    stats = await store.read_stats(sid)
+async def record_answer(pid: str, sid: str, qid: str, success: bool) -> dict:
+    stats = await quiz_store.read_stats(pid, sid)
     if not stats:
         stats = {"num_questions": 0, "questions": {}, "date_last_modified": _local_now(),
                  "date_added": _local_now()}
@@ -192,7 +196,7 @@ async def record_answer(sid: str, qid: str, success: bool) -> dict:
     q["next_review"] = review.strftime("%Y-%m-%dT%H:%M:%SZ")
     q["last_played"] = _now()
     stats["date_last_modified"] = _local_now()
-    await store.save_stats(sid, stats)
+    await quiz_store.save_stats(pid, sid, stats)
     return q
 
 def _next_qid(questions: list) -> str:
@@ -201,7 +205,6 @@ def _next_qid(questions: list) -> str:
     while f"q{n}" in used:
         n += 1
     return f"q{n}"
-
 
 def _normalize_manual_question(question, answers, answer_index) -> dict:
     question = (question or "").strip()
@@ -219,19 +222,18 @@ def _normalize_manual_question(question, answers, answer_index) -> dict:
         raise ValueError("The correct-answer index is out of range.")
     return {"question": question, "answers": answers, "answer_index": answer_index}
 
-
-async def add_quiz_question(sid: str, question: str, answers: list,
+async def add_quiz_question(pid: str, sid: str, question: str, answers: list,
                             answer_index: int = 0) -> dict:
-    quiz = await store.read_quiz(sid)
+    quiz = await quiz_store.read_quiz(pid, sid)
     questions = quiz.setdefault("questions", [])
     payload = _normalize_manual_question(question, answers, answer_index)
     qid = _next_qid(questions)
     q = {"id": qid, **payload}
     questions.append(q)
     quiz["updated_at"] = _local_now()
-    await store.save_quiz(sid, quiz)
+    await quiz_store.save_quiz(pid, sid, quiz)
 
-    stats = await store.read_stats(sid)
+    stats = await quiz_store.read_stats(pid, sid)
     if not stats:
         stats = {"num_questions": 0, "questions": {}, "date_added": _local_now(),
                  "date_last_modified": _local_now()}
@@ -240,13 +242,12 @@ async def add_quiz_question(sid: str, question: str, answers: list,
         "next_review": "", "last_played": ""}
     stats["num_questions"] = len(questions)
     stats["date_last_modified"] = _local_now()
-    await store.save_stats(sid, stats)
+    await quiz_store.save_stats(pid, sid, stats)
     return q
 
-
-async def update_quiz_question(sid: str, qid: str, question=None,
+async def update_quiz_question(pid: str, sid: str, qid: str, question=None,
                                answers=None, answer_index=None) -> dict:
-    quiz = await store.read_quiz(sid)
+    quiz = await quiz_store.read_quiz(pid, sid)
     questions = quiz.get("questions", [])
     q = next((x for x in questions if x.get("id") == qid), None)
     if q is None:
@@ -258,31 +259,29 @@ async def update_quiz_question(sid: str, qid: str, question=None,
     )
     q.update(payload)
     quiz["updated_at"] = _local_now()
-    await store.save_quiz(sid, quiz)
+    await quiz_store.save_quiz(pid, sid, quiz)
     return q
 
-
-async def delete_quiz_question(sid: str, qid: str) -> None:
-    quiz = await store.read_quiz(sid)
+async def delete_quiz_question(pid: str, sid: str, qid: str) -> None:
+    quiz = await quiz_store.read_quiz(pid, sid)
     questions = quiz.get("questions", [])
     remaining = [q for q in questions if q.get("id") != qid]
     if len(remaining) == len(questions):
         raise KeyError(f"question {qid!r} not found in quiz")
     quiz["questions"] = remaining
     quiz["updated_at"] = _local_now()
-    await store.save_quiz(sid, quiz)
+    await quiz_store.save_quiz(pid, sid, quiz)
 
-    stats = await store.read_stats(sid)
+    stats = await quiz_store.read_stats(pid, sid)
     if stats:
         stats.get("questions", {}).pop(qid, None)
         stats["num_questions"] = len(remaining)
         stats["date_last_modified"] = _local_now()
-        await store.save_stats(sid, stats)
+        await quiz_store.save_stats(pid, sid, stats)
 
-
-async def quiz_order(sid: str) -> list:
-    quiz = await store.read_quiz(sid)
-    stats = await store.read_stats(sid)
+async def quiz_order(pid: str, sid: str) -> list:
+    quiz = await quiz_store.read_quiz(pid, sid)
+    stats = await quiz_store.read_stats(pid, sid)
     now = _now()
 
     def key(q):
@@ -295,14 +294,18 @@ async def quiz_order(sid: str) -> list:
 
     return sorted(quiz.get("questions", []), key=key)
 
-async def stream_summarize(sid: str, scope: str = "both", length: str = "medium",
+async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
+                           scope: str = "both", length: str = "medium",
                            language: str = "English"):
     """Summarize, streaming token events; appends the summary to the notes."""
     try:
         row = await store.get_source(sid)
         if not row:
             raise ValueError("source not found")
-        notes, doc = await material_for(scope, row)
+        page = await note_store.get(note_id)
+        if not page:
+            raise ValueError("note page not found")
+        notes, doc = await material_for(scope, row, page["content"])
         _check_material(scope, notes, doc)
 
         system = llm.load_prompt(
@@ -328,9 +331,10 @@ async def stream_summarize(sid: str, scope: str = "both", length: str = "medium"
             yield {"type": "token", "text": token}
 
         summary = text.strip()
-        current_notes = row.get("notes") or ""
-        await store.save_note(sid, current_notes.rstrip()
-                              + f"\n\n---\n\n## Summary — {_local_now()}\n\n{summary}\n")
+        await note_store.append(
+            note_id, summary, author=author,
+            header=f"---\n\n## Summary — {_local_now()}")
+        await quiz_store.touch(pid, sid)
         yield {"type": "done", "chars": len(summary)}
     except Exception as e:
         yield {"type": "error", "error": str(e)}

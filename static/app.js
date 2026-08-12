@@ -1,11 +1,16 @@
 "use strict";
 
-const $ = (s, el = document) => el.querySelector(s);
-const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+/* Personal workspace page. $, api, toast, renderMarkdown, modals and the
+ * identity header live in common.js, which must load first. */
 
 const S = {
+  pid: "",            // the workspace is a project like any other
   sources: [],
-  current: null,
+  standalone: [],     // standalone note pages in the workspace tree
+  sel: null,          // {kind:"source"|"note"|"folder", id} — mirrors TREE.sel
+  current: null,      // the selected source row, or null
+  noteId: null,       // the note page being edited, whatever selected it
+  noteVersion: 1,
   noteMode: "preview",
   noteDirty: false,
   saveTimer: null,
@@ -14,27 +19,6 @@ const S = {
   qmEditId: null,
 };
 
-
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, c => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[c]));
-}
-
-async function api(path, opts = {}) {
-  const init = { headers: {}, ...opts };
-  if (init.body && !(init.body instanceof FormData) && typeof init.body !== "string") {
-    init.headers["Content-Type"] = "application/json";
-    init.body = JSON.stringify(init.body);
-  }
-  const res = await fetch(path, init);
-  let data = null;
-  try { data = await res.json(); } catch (_) {}
-  if (!res.ok || (data && data.ok === false)) {
-    throw new Error((data && data.error) || `HTTP ${res.status}`);
-  }
-  return data;
-}
 
 function streamSSE(path, body, onToken) {
   return new Promise((resolve, reject) => {
@@ -75,16 +59,6 @@ function streamSSE(path, body, onToken) {
   });
 }
 
-let _toastTimer;
-
-function toast(msg, kind = "info", ms = 4200) {
-  const t = $("#toast");
-  t.textContent = msg;
-  t.className = "toast show " + kind;
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => { t.className = "toast"; }, ms);
-}
-
 function setBusy(btn, busy, label) {
   if (!btn) return;
   if (busy) {
@@ -97,128 +71,126 @@ function setBusy(btn, busy, label) {
   }
 }
 
-function modalEl(id) {
-  return $(id.startsWith("#") ? id : `#${id}`);
-}
+/* ---------- The library tree (shared with the project pages) ---------- */
 
-function openModal(id) { modalEl(id).classList.remove("hidden"); }
-function closeModal(id) { modalEl(id).classList.add("hidden"); }
+const TREE = makeTree({
+  host: $("#dir-list"),
+  readOnly: () => false,          // it is your own workspace
+  role: () => "owner",
+  showQuestions: () => true,
+  removeTitle: "Delete source",
+  empty: '<div class="empty">No sources yet.<br>Add one with <b>+ Import</b>.</div>',
+  reload: refreshTree,
+  onSelect: openRef,
+  onRemoveSource: deleteSource,
+  onDeleteNote: deleteNotePage,
+});
 
+$("#btn-new-folder").addEventListener("click", () => TREE.newFolder());
+$("#btn-new-note").addEventListener("click", () => TREE.newNote());
 
-function renderMarkdown(md) {
-  if (!md) return "";
-  let html;
-  if (window.marked) {
-    html = window.marked.parse(md, { breaks: true, gfm: true });
-  } else {
-    html = miniMarkdown(md);
-  }
-  if (window.DOMPurify) return DOMPurify.sanitize(html);
-  return html.replace(/<script[\s\S]*?<\/script>/gi, "");
-}
-
-function miniMarkdown(md) {
-  const esc = md.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const lines = esc.split(/\r?\n/);
-  const out = [];
-  let inCode = false;
-  let para = [];
-  const flushP = () => {
-    if (para.length) { out.push("<p>" + para.join("<br>") + "</p>"); para = []; }
-  };
-  for (const raw of lines) {
-    if (raw.startsWith("```")) {
-      flushP();
-      if (!inCode) { out.push("<pre><code>"); inCode = true; }
-      else { out.push("</code></pre>"); inCode = false; }
-      continue;
-    }
-    if (inCode) { out.push(raw); continue; }
-    const h = raw.match(/^(#{1,6})\s+(.*)/);
-    if (h) { flushP(); out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
-    if (/^[-*]\s+/.test(raw)) { flushP(); out.push(`<li>${inline(raw.replace(/^[-*]\s+/, ""))}</li>`); continue; }
-    if (/^\d+\.\s+/.test(raw)) { flushP(); out.push(`<li>${inline(raw.replace(/^\d+\.\s+/, ""))}</li>`); continue; }
-    if (/^---+\s*$/.test(raw)) { flushP(); out.push("<hr>"); continue; }
-    if (raw.trim() === "") { flushP(); continue; }
-    para.push(inline(raw));
-  }
-  flushP();
-  if (inCode) out.push("</code></pre>");
-  return out.join("\n");
-}
-
-function inline(t) {
-  return t
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener">$1</a>');
-}
-
-async function refreshDirectory() {
-  const q = $("#search").value.trim();
-  let data;
+async function refreshTree() {
+  let t;
   try {
-    data = await api("/api/sources" + (q ? "?q=" + encodeURIComponent(q) : ""));
+    t = await api(`/api/projects/${S.pid}/tree`);
   } catch (e) {
     toast("Failed to load sources: " + e.message, "err");
     return;
   }
-  S.sources = data.sources;
-  renderDirectory();
+  S.sources = t.sources;
+  S.standalone = t.notes;
+  const n = S.sources.length;
+  $("#dir-count").textContent = n ? `${n} source${n === 1 ? "" : "s"}` : "";
+  TREE.setData({ folders: t.folders, sources: t.sources, notes: t.notes });
+  TREE.render();
+  if (S.sel && !TREE.sel) resetNoSource();
 }
 
-function renderDirectory() {
-  const list = $("#dir-list");
-  if (!S.sources.length) {
-    list.innerHTML = '<div class="empty">No sources yet.<br>Add one with <b>+ Import</b>.</div>';
-    return;
-  }
-  list.innerHTML = "";
-  for (const s of S.sources) {
-    const el = document.createElement("div");
-    el.className = "dir-item" + (S.current && s.id === S.current.id ? " active" : "");
-    el.dataset.id = s.id;
-    const tags = (s.tags || "").split(",").map(t => t.trim()).filter(Boolean)
-      .map(t => `<span class="chip">@${escapeHtml(t)}</span>`).join("");
-    const cat = s.category ? `<span class="cat">${escapeHtml(s.category)}</span>` : "";
-    el.innerHTML = `
-      <div class="dir-item-top">
-        <span class="dir-title" title="${escapeHtml(s.title)}">${escapeHtml(s.title)}</span>
-        <span class="pill type-${s.source_type.replace("+", "\\+")}">${escapeHtml(s.source_type)}</span>
-        <button class="del" data-del="${s.id}" title="Delete source">×</button>
-      </div>
-      <div class="dir-sub">${cat}${tags}<span class="qcount" title="questions in quiz">${s.num_questions}Q</span></div>`;
-    list.appendChild(el);
-  }
+
+/* ---------- Selection ---------- */
+
+function selectSource(id, noteMode = "preview") {
+  S.noteMode = noteMode;
+  return TREE.setSelection({ kind: "source", id });
 }
 
-async function selectSource(id, noteMode = "preview") {
-  const s = S.sources.find(x => x.id === id);
-  if (!s) return;
+/** Every selection lands here, whatever opened it. */
+async function openRef(ref) {
   if (S.streaming) { toast("Wait for the summary to finish first", "warn"); return; }
   if (S.noteDirty) await saveNote();
+  S.sel = ref;
+  if (!ref) return resetNoSource();
+  if (ref.kind === "source") return openSource(ref.id);
+  if (ref.kind === "note") return openStandalone(ref.id);
+  return openFolder(ref.id);
+}
+
+async function openSource(id) {
+  const s = S.sources.find(x => x.id === id);
+  if (!s) return;
   S.current = s;
-  renderDirectory();
   setToolbar(s);
   await loadResource(s);
   await loadNote(s);
-  S.noteMode = noteMode;
   applyNoteMode();
   $("#meta-category").value = s.category || "";
   $("#res-footer").classList.remove("hidden");
 }
 
+async function openFolder(path) {
+  S.current = null;
+  S.noteId = null;
+  setToolbar(null);
+  $("#res-footer").classList.add("hidden");
+  $("#note-editor").classList.add("hidden");
+  $("#note-preview").classList.remove("hidden");
+  $("#note-preview").innerHTML =
+    `<p class="muted">Folder <b>${escapeHtml(path)}</b>. Its README is shown on the left; `
+    + "add one with <b>+ Note</b> named <code>README</code>.</p>";
+  const readme = (await api(`/api/projects/${S.pid}/readme?folder=`
+                            + encodeURIComponent(path))).note;
+  showCompiled(path, readme ? readme.content : "*No README in this folder yet.*");
+}
+
+async function openStandalone(nid) {
+  S.current = null;
+  setToolbar(null);
+  $("#res-footer").classList.add("hidden");
+  const d = await api(`/api/notes/${nid}`);
+  S.noteId = d.note.id;
+  S.noteVersion = d.note.version;
+  S.noteName = d.note.name;
+  $("#note-editor").value = d.note.content;
+  $("#note-save-state").textContent = "";
+  S.noteDirty = false;
+  // A standalone note has no document to show, so the viewer renders the note
+  // itself — which makes the editor a live preview.
+  S.noteMode = "edit";
+  applyNoteMode();
+  showCompiled(d.note.name, d.note.content);
+}
+
+function showCompiled(title, markdown) {
+  $("#res-title").textContent = title || "Note";
+  $("#res-meta").classList.add("hidden");
+  $("#res-frame").classList.add("hidden");
+  $("#res-frame").src = "about:blank";
+  $("#res-empty").classList.add("hidden");
+  const md = $("#res-md");
+  md.innerHTML = renderMarkdown(markdown);
+  md.classList.remove("hidden");
+}
+
 function setToolbar(s) {
   const on = !!s;
-  ["btn-quiz-gen", "btn-quiz-play", "btn-summarize", "btn-manage-tags", "btn-manage-quiz"].forEach(id => {
-    $(`#${id}`).disabled = !on;
-  });
+  ["btn-quiz-gen", "btn-quiz-play", "btn-summarize", "btn-edit-tags", "btn-edit-quiz"]
+    .forEach(id => { $(`#${id}`).disabled = !on; });
 }
 
 function resetNoSource() {
   S.current = null;
+  S.sel = null;
+  S.noteId = null;
   $("#res-title").textContent = "Resource";
   $("#res-meta").textContent = "";
   $("#res-meta").classList.add("hidden");
@@ -267,6 +239,8 @@ async function loadNote(s) {
   try {
     const data = await api(`/api/note/${s.id}`);
     S.noteContent = data.content;
+    S.noteId = data.note_id;
+    S.noteVersion = data.version;
     $("#note-editor").value = S.noteContent;
     $("#note-preview").innerHTML = renderMarkdown(S.noteContent);
     $("#note-save-state").textContent = "";
@@ -276,7 +250,7 @@ async function loadNote(s) {
 }
 
 function onNoteTyped() {
-  if (!S.current || S.streaming) return;
+  if (!S.noteId || S.streaming) return;
   S.noteDirty = true;
   $("#note-save-state").textContent = "unsaved…";
   clearTimeout(S.saveTimer);
@@ -284,11 +258,25 @@ function onNoteTyped() {
 }
 
 async function saveNote() {
-  if (!S.current || !S.noteDirty) return;
+  if (!S.noteId || !S.noteDirty) return;
   const content = $("#note-editor").value;
   S.noteDirty = false;
   try {
-    await api(`/api/note/${S.current.id}`, { method: "PUT", body: { content } });
+    if (S.current) {
+      // The source route resolves the workspace's single page for us.
+      const d = await api(`/api/note/${S.current.id}`, {
+        method: "PUT",
+        body: { content, base_version: S.noteVersion },
+      });
+      S.noteVersion = d.version;
+    } else {
+      const d = await api(`/api/notes/${S.noteId}`, {
+        method: "PUT",
+        body: { content, base_version: S.noteVersion },
+      });
+      S.noteVersion = d.note.version;
+      showCompiled(d.note.name, d.note.content);   // the viewer *is* this note
+    }
     $("#note-save-state").textContent = "saved";
   } catch (e) {
     S.noteDirty = true;
@@ -298,12 +286,16 @@ async function saveNote() {
 }
 
 function applyNoteMode() {
-  const edit = S.noteMode === "edit";
+  const standalone = S.sel && S.sel.kind === "note";
+  const edit = standalone || S.noteMode === "edit";
   $("#note-editor").classList.toggle("hidden", !edit);
   $("#note-preview").classList.toggle("hidden", edit);
+  $("#note-hint").textContent = standalone
+    ? "Live preview — the compiled note is shown on the left"
+    : "Ctrl+D toggles preview";
   if (!edit) {
     $("#note-preview").innerHTML = renderMarkdown($("#note-editor").value);
-  } else if (S.current) {
+  } else if (S.noteId) {
     $("#note-editor").focus();
   }
 }
@@ -328,11 +320,11 @@ $("#import-submit").addEventListener("click", async () => {
     closeModal("#modal-import");
     if (data.duplicate) {
       toast(`Already imported — opened existing “${data.title}”`, "warn");
-      await refreshDirectory();
+      await refreshTree();
       await selectSource(data.id, "preview");
     } else {
       toast(`Imported “${data.title}” (${data.source_type})`, "ok");
-      await refreshDirectory();
+      await refreshTree();
       await selectSource(data.id, "edit");
     }
   } catch (e) {
@@ -350,6 +342,7 @@ $("#meta-save").addEventListener("click", async () => {
       body: { category: $("#meta-category").value },
     });
     S.current.category = d.category;
+    TREE.render();                 // the unfolded row shows the category
     toast("Metadata saved", "ok");
   } catch (e) {
     toast("Failed to save metadata: " + e.message, "err");
@@ -357,23 +350,42 @@ $("#meta-save").addEventListener("click", async () => {
 });
 
 async function deleteSource(id) {
-  if (!confirm("Delete this source, its notes, quiz and stats?")) return;
+  const s = S.sources.find(x => x.id === id);
+  if (!await confirmModal({
+    title: "Delete source",
+    body: `Delete “${s ? s.title : id}”, its notes, quiz and stats?`,
+    hint: "This removes it from every project that holds it.",
+    confirm: "Delete source",
+    danger: true,
+  })) return;
   try {
     await api("/api/source/" + id, { method: "DELETE" });
-    if (S.current && S.current.id === id) resetNoSource();
-    await refreshDirectory();
+    if (S.current && S.current.id === id) TREE.sel = null;
+    await refreshTree();
     toast("Source deleted", "ok");
   } catch (e) {
     toast("Delete failed: " + e.message, "err");
   }
 }
 
-$("#dir-list").addEventListener("click", async e => {
-  const del = e.target.closest("[data-del]");
-  if (del) { e.stopPropagation(); await deleteSource(del.dataset.del); return; }
-  const item = e.target.closest(".dir-item");
-  if (item) await selectSource(item.dataset.id, "preview");
-});
+async function deleteNotePage(nid) {
+  const page = S.standalone.find(n => n.id === nid);
+  if (!await confirmModal({
+    title: "Delete note page",
+    body: `Delete the note page “${page ? page.name : nid}”?`,
+    hint: "Its text is gone for good.",
+    confirm: "Delete page",
+    danger: true,
+  })) return;
+  try {
+    await api(`/api/notes/${nid}`, { method: "DELETE" });
+    if (S.sel && S.sel.kind === "note" && S.sel.id === nid) TREE.sel = null;
+    await refreshTree();
+    toast("Page deleted", "ok");
+  } catch (e) {
+    toast(e.message, "err", 7000);
+  }
+}
 
 $("#btn-quiz-gen").addEventListener("click", () => openModal("#modal-quiz-gen"));
 
@@ -392,7 +404,7 @@ $("#quiz-gen-submit").addEventListener("click", async () => {
     const done = await streamSSE(`/api/quiz/${S.current.id}/generate`, body);
     closeModal("#modal-quiz-gen");
     toast(`Quiz ready: ${done.questions} questions`, "ok");
-    await refreshDirectory();
+    await refreshTree();
   } catch (e) {
     toast("Quiz generation failed: " + e.message, "err", 10000);
   } finally {
@@ -405,14 +417,17 @@ $("#btn-summarize").addEventListener("click", () => openModal("#modal-summarize"
 $("#summarize-submit").addEventListener("click", async () => {
   if (!S.current) return;
   if (S.streaming) { toast("Already summarizing…", "warn"); return; }
+  closeModal("#modal-summarize");
+
+  await saveNote();
+  // The summary is appended to a specific note page, so send its id — the
+  // server no longer has a notion of "the" note for a source.
   const body = {
     scope: $('input[name="su-scope"]:checked').value,
     length: $("#su-length").value,
     language: $("#su-language").value.trim() || "English",
+    note_id: S.noteId,
   };
-  closeModal("#modal-summarize");
-
-  await saveNote();
   const base = $("#note-editor").value || "";
   const editor = $("#note-editor");
   const saveState = $("#note-save-state");
@@ -555,7 +570,7 @@ function startQuizSession(quiz, questions) {
         <button class="btn" data-close="modal-quiz-play">Close</button>
       </div>`;
     $("#qz-restart").addEventListener("click", () => startQuizSession(quiz, questions));
-    refreshDirectory();
+    refreshTree();
   }
 }
 
@@ -581,74 +596,20 @@ $$(".modal").forEach(m => m.addEventListener("mousedown", e => {
   if (e.target === m) m.classList.add("hidden");
 }));
 
-/* ---------- Tags management ---------- */
+/* ---------- Tags ---------- */
 
-function currentTags() {
-  return (S.current ? (S.current.tags || "") : "").split(",").map(t => t.trim()).filter(Boolean);
-}
-
-function openTagsModal() {
+/* The manager itself lives in common.js, so the project pages open the exact
+ * same dialog. Tags are stored on the source row, which is why one added here
+ * shows up in every project holding that source. */
+function editTags() {
   if (!S.current) return;
-  renderTags();
-  openModal("#modal-tags");
-  setTimeout(() => $("#tag-input").focus(), 60);
+  openTagsModal({
+    source: S.current,
+    onSaved: () => TREE.render(),   // the unfolded row shows the same tags
+  });
 }
 
-function renderTags() {
-  const list = $("#tags-list");
-  const tags = currentTags();
-  if (!tags.length) {
-    list.innerHTML = '<p class="muted">No tags yet — add one below.</p>';
-  } else {
-    list.innerHTML = "";
-    for (const t of tags) {
-      const el = document.createElement("div");
-      el.className = "tag-chip";
-      el.innerHTML =
-        `<button class="tag-x" data-tag="${escapeHtml(t)}" title="Remove tag">×</button><span>@${escapeHtml(t)}</span>`;
-      list.appendChild(el);
-    }
-  }
-  $("#tag-input").value = "";
-}
-
-async function saveTags(tags) {
-  if (!S.current) return false;
-  const joined = tags.join(", ");
-  try {
-    await api(`/api/source/${S.current.id}/meta`, { method: "POST", body: { tags: joined } });
-    if (S.current) S.current.tags = joined;
-    await refreshDirectory();
-    renderTags();
-    return true;
-  } catch (e) {
-    toast("Failed to save tags: " + e.message, "err");
-    return false;
-  }
-}
-
-function addTagFromInput() {
-  const v = $("#tag-input").value.trim().replace(/^@/, "");
-  if (!v) return;
-  const tags = currentTags();
-  if (tags.some(t => t.toLowerCase() === v.toLowerCase())) {
-    toast("Tag already exists", "warn");
-    return;
-  }
-  saveTags([...tags, v]);
-}
-
-$("#btn-manage-tags").addEventListener("click", openTagsModal);
-$("#btn-open-tags").addEventListener("click", openTagsModal);
-$("#tag-add-btn").addEventListener("click", addTagFromInput);
-$("#tag-input").addEventListener("keydown", e => {
-  if (e.key === "Enter") { e.preventDefault(); addTagFromInput(); }
-});
-$("#tags-list").addEventListener("click", e => {
-  const x = e.target.closest(".tag-x");
-  if (!x) return;
-  saveTags(currentTags().filter(t => t !== x.dataset.tag));
-});
+$("#btn-edit-tags").addEventListener("click", editTags);
 
 /* ---------- Quiz management ---------- */
 
@@ -721,7 +682,7 @@ async function refreshQuizManager() {
   } catch (_) {}
   renderQuizList();
   resetQuizForm();
-  refreshDirectory();
+  refreshTree();
 }
 
 async function saveQuizForm() {
@@ -755,7 +716,7 @@ async function saveQuizForm() {
   }
 }
 
-$("#btn-manage-quiz").addEventListener("click", openQuizManager);
+$("#btn-edit-quiz").addEventListener("click", openQuizManager);
 $("#qm-add-btn").addEventListener("click", saveQuizForm);
 $("#qm-cancel").addEventListener("click", resetQuizForm);
 $("#qm-question").addEventListener("keydown", e => {
@@ -768,7 +729,13 @@ $("#qm-list").addEventListener("click", async e => {
   if (!item) return;
   const qid = item.dataset.qid;
   if (act.dataset.act === "del") {
-    if (!confirm("Delete this question and its stats?")) return;
+    if (!await confirmModal({
+      title: "Delete question",
+      body: "Delete this question and its stats?",
+      hint: "The answers you have already given to it are dropped too.",
+      confirm: "Delete question",
+      danger: true,
+    })) return;
     try {
       await api(`/api/quiz/${S.current.id}/questions/${encodeURIComponent(qid)}`, { method: "DELETE" });
       await refreshQuizManager();
@@ -789,8 +756,8 @@ function showCtxMenu(x, y, s) {
   const menu = $("#ctx-menu");
   menu.innerHTML = "";
   const items = [
-    { label: "Manage quiz…", danger: false },
-    { label: "Manage tags…", danger: false },
+    { label: "Edit quiz…", danger: false },
+    { label: "Edit tags…", danger: false },
     { label: "Delete source", danger: true },
   ];
   for (const it of items) {
@@ -799,9 +766,9 @@ function showCtxMenu(x, y, s) {
     b.textContent = it.label;
     b.addEventListener("click", async () => {
       hideCtx();
-      if (S.current && S.current.id !== s.id) await selectSource(s.id, "preview");
-      if (it.label === "Manage quiz…") openQuizManager();
-      else if (it.label === "Manage tags…") openTagsModal();
+      if (!S.current || S.current.id !== s.id) await selectSource(s.id, "preview");
+      if (it.label === "Edit quiz…") openQuizManager();
+      else if (it.label === "Edit tags…") editTags();
       else deleteSource(s.id);
     });
     menu.appendChild(b);
@@ -815,7 +782,7 @@ function showCtxMenu(x, y, s) {
 }
 
 document.addEventListener("contextmenu", e => {
-  const item = e.target.closest(".dir-item");
+  const item = e.target.closest(".tree-row.source");
   if (!item) { hideCtx(); return; }
   e.preventDefault();
   const s = S.sources.find(x => x.id === item.dataset.id);
@@ -831,8 +798,24 @@ document.addEventListener("click", e => {
 let _searchTimer;
 $("#search").addEventListener("input", () => {
   clearTimeout(_searchTimer);
-  _searchTimer = setTimeout(refreshDirectory, 300);
+  _searchTimer = setTimeout(applySearch, 300);
 });
+
+/** This box also understands "/project", which only the server can resolve, so
+ *  sources are filtered by the ids it hands back; folders and standalone notes
+ *  fall back to the name match both pages share. */
+async function applySearch() {
+  const q = $("#search").value.trim();
+  if (!q) return TREE.applyFilter(null);
+  const local = TREE.queryPredicate(q);
+  let ids = null;
+  try {
+    ids = new Set((await api("/api/sources?q=" + encodeURIComponent(q))).sources
+      .map(s => s.id));
+  } catch (e) { /* offline or a bad query: filter in the browser instead */ }
+  TREE.applyFilter((kind, item) =>
+    (kind === "source" && ids) ? ids.has(item.id) : local(kind, item));
+}
 
 function setupSplitter(handle, leftPanel, storageKey, min = 0.14, max = 0.72) {
   const saved = parseFloat(localStorage.getItem(storageKey));
@@ -858,9 +841,16 @@ function setupSplitter(handle, leftPanel, storageKey, min = 0.14, max = 0.72) {
 }
 
 async function init() {
+  await initIdentity();
+  S.pid = (KNDB.personal && KNDB.personal.id) || "";
+  if (!S.pid) {
+    toast("Could not reach the server — reload to try again", "err", 9000);
+    return;
+  }
+  TREE.setProject(S.pid);
   setupSplitter($('.splitter[data-split="dir"]'), $("#panel-dir"), "kndb.w.dir");
   setupSplitter($('.splitter[data-split="res"]'), $("#panel-res"), "kndb.w.res");
-  await refreshDirectory();
+  await refreshTree();
   const m = location.hash.match(/^#src=([\w]+)/);
   if (m) {
     const srcId = decodeURIComponent(m[1]);
