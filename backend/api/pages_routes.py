@@ -1,9 +1,10 @@
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from backend.core import config
+from backend.data import projects
 
 
 router = APIRouter()
@@ -19,3 +20,10 @@ async def index():
 @router.get("/projects")
 async def projects_page():
     return FileResponse(os.path.join(BASE_DIR, "static", "projects.html"))
+
+
+@router.get("/projects/{pid}")
+async def project_page(pid: str):
+    if not await projects.get_project(pid):
+        raise HTTPException(404, f"project {pid} not found")
+    return FileResponse(os.path.join(BASE_DIR, "static", "project.html"))

@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<link rel="icon" href="data:,">
+<title>Project — KNDB</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">KNDB<span class="brand-sub">knowledge database</span></div>
+  <nav class="top-nav">
+    <a href="/" class="tab">Sources</a>
+    <a href="/projects" class="tab active">Projects</a>
+  </nav>
+  <div class="top-actions">
+    <span id="prj-badge" class="pill type-completed hidden">completed</span>
+    <a href="/projects" class="btn small">← All projects</a>
+  </div>
+</header>
+
+<div class="subbar">
+  <div class="sub-name" id="sub-name">…</div>
+  <nav class="sub-tabs">
+    <button class="subtab active" data-tab="overview">Overview</button>
+    <button class="subtab" data-tab="library">Library</button>
+    <button class="subtab" data-tab="latex">LaTeX editor</button>
+    <button class="subtab" data-tab="settings">Settings</button>
+  </nav>
+</div>
+
+<main id="main" class="main">
+
+  <!-- ======================= OVERVIEW ======================= -->
+  <div id="tab-overview" class="tab-pane">
+    <div class="pane-body ov-body">
+      <div class="ov-head">
+        <h1 id="ov-name">…</h1>
+        <span id="ov-badge" class="pill type-completed hidden">completed</span>
+      </div>
+      <p id="ov-desc" class="ov-desc muted"></p>
+
+      <div class="ov-stats">
+        <div class="stat"><div class="stat-num" id="ov-count-src">0</div><div class="stat-lbl">sources</div></div>
+        <div class="stat"><div class="stat-num" id="ov-count-mem">0</div><div class="stat-lbl">members</div></div>
+        <div class="stat"><div class="stat-num" id="ov-created">–</div><div class="stat-lbl">created</div></div>
+      </div>
+
+      <div class="ov-grid">
+        <div class="dblock ov-ph">
+          <div class="dblock-head">Placeholder</div>
+          <p class="muted hint">Reserved space — future content will appear here&nbsp;/&nbsp;left column of the overview.</p>
+        </div>
+        <div class="dblock">
+          <div class="dblock-head">Sources in this project</div>
+          <div id="ov-src" class="mini-list"><p class="muted">No sources yet — head to the Library.</p></div>
+        </div>
+        <div class="dblock">
+          <div class="dblock-head">Members</div>
+          <div id="ov-mem" class="mini-list"><p class="muted">No members.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= LIBRARY ======================= -->
+  <div id="tab-library" class="tab-pane library hidden">
+    <section id="panel-dir" class="panel">
+      <div class="panel-head">
+        <span>Library</span>
+        <span id="dir-count" class="muted" style="text-transform:none;"></span>
+        <button id="btn-add-source" class="btn small" style="margin-left:auto;">+ Add</button>
+      </div>
+      <input id="search" class="search" type="search" spellcheck="false"
+             placeholder="Filter this library…">
+      <div id="dir-list" class="dir-list"></div>
+    </section>
+    <div class="splitter" data-split="dir"></div>
+
+    <section id="panel-res" class="panel">
+      <div class="panel-head">
+        <span id="res-title" class="panel-title">Resource</span>
+        <span id="res-meta" class="pill hidden"></span>
+      </div>
+      <div id="res-body" class="res-body">
+        <div id="res-empty" class="empty">Select a source from the library to read it and<br>
+          edit the shared notes next to it.</div>
+        <iframe id="res-frame" class="res-frame hidden" sandbox="allow-same-origin allow-scripts"></iframe>
+        <div id="res-md" class="res-md prose hidden"></div>
+      </div>
+    </section>
+    <div class="splitter" data-split="res"></div>
+
+    <section id="panel-note" class="panel">
+      <div class="panel-head">
+        <span class="panel-title">Notes</span>
+        <span id="note-save-state" class="save-state"></span>
+        <span class="note-hint">Ctrl+D toggles preview · notes are shared with your personal space</span>
+      </div>
+      <div class="note-wrap">
+        <textarea id="note-editor" class="note-editor hidden" spellcheck="false"
+                  placeholder="Write shared notes in Markdown for this source…"></textarea>
+        <div id="note-preview" class="note-preview prose hidden">
+          <p class="muted">Select a source in the library to read and edit its notes.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ======================= LATEX ======================= -->
+  <div id="tab-latex" class="tab-pane hidden">
+    <div class="pane-body">
+      <div class="pane-title">
+        <h2>LaTeX editor</h2>
+        <span class="muted">(placeholder — not synced)</span>
+      </div>
+      <p class="muted hint">Draft autosaved in this browser only. Nothing is sent to the server.</p>
+      <textarea id="tex-editor" class="input tex-editor mono" spellcheck="false"
+                placeholder="% This is a local, unsynced placeholder for the future collaborative LaTeX editor.&#10;% Your text is kept in this browser only (localStorage)."></textarea>
+    </div>
+  </div>
+
+  <!-- ======================= SETTINGS ======================= -->
+  <div id="tab-settings" class="tab-pane hidden">
+    <div class="pane-body settings-grid">
+      <div class="dblock">
+        <div class="dblock-head">Details</div>
+        <label class="lbl">Name</label>
+        <input id="set-name" class="input" type="text" spellcheck="false">
+        <label class="lbl">Description</label>
+        <textarea id="set-desc" class="input" rows="3" spellcheck="false"></textarea>
+        <div class="dblock-actions">
+          <button id="btn-save-detail" class="btn small">Save details</button>
+          <button id="btn-toggle-complete" class="btn small">Mark completed</button>
+          <button id="btn-del" class="btn small danger">Delete project</button>
+        </div>
+        <p class="muted hint">Marking a project <b>completed</b> archives it as a read-only
+          workspace that appears flagged in the project list.</p>
+      </div>
+
+      <div class="dblock">
+        <div class="dblock-head">Members</div>
+        <div id="prj-members" class="mini-list"></div>
+        <div class="member-add">
+          <input id="member-name" class="input" placeholder="member name" spellcheck="false">
+          <select id="member-role" class="input">
+            <option value="owner">owner</option>
+            <option value="maintainer">maintainer</option>
+            <option value="contributor" selected>contributor</option>
+            <option value="spectator">spectator</option>
+          </select>
+          <button id="btn-add-member" class="btn small">+ Add</button>
+        </div>
+        <p class="muted hint">No accounts yet — members are placeholders for the future
+          collaborative system. You are the <b>owner</b> of this project.</p>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Add sources to project modal -->
+<div class="modal hidden" id="modal-add-src">
+  <div class="modal-box">
+    <div class="modal-head"><h3>Add sources to project</h3><button class="x" data-close="modal-add-src">×</button></div>
+    <div class="modal-body">
+      <p class="muted" style="margin-top:8px;">Pick from your personal library. Notes and documents stay
+        shared between the two spaces.</p>
+      <input id="add-src-filter" class="input" type="search" placeholder="Filter sources…" spellcheck="false">
+      <div id="add-src-list" class="check-list"></div>
+      <div class="modal-actions">
+        <button id="add-src-submit" class="btn primary">Add selected</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<script src="/static/project.js"></script>
+</body>
+</html>
