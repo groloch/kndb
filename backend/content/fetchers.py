@@ -77,7 +77,7 @@ def classify_url(url: str) -> str:
 async def fetch_by_kind(kind: str, url: str) -> dict:
     """Dispatch. Every fetch returns::
 
-        {"source_type", "content" (str|bytes), "title", "seed", "url"}
+        {"source_type", "content" (str|bytes), "title", "url"}
 
     plus an optional ``"text"`` — a clean plain-text rendition of the same
     document, cached alongside the blob and preferred over parsing the blob
@@ -100,7 +100,6 @@ async def fetch_arxiv(url: str) -> dict:
     meta = {
         "source_type": "pdf",
         "title": f"arXiv:{aid}",
-        "seed": "",
         "url": f"https://arxiv.org/abs/{aid}",
     }
     api, pdf, text = await asyncio.gather(
@@ -119,8 +118,8 @@ async def _arxiv_pdf(aid: str) -> bytes:
     return r.content
 
 async def _arxiv_api_meta(aid: str) -> dict:
-    """Title/authors/abstract from the arXiv API. Best effort — the import
-    still works off the bare ID when this is unavailable."""
+    """The title from the arXiv API. Best effort — the import still works off
+    the bare ID when this is unavailable."""
     out = {}
     try:
         r = await _http_get(f"https://export.arxiv.org/api/query?id_list={aid}",
@@ -133,19 +132,8 @@ async def _arxiv_api_meta(aid: str) -> dict:
             return out
         title = (entry.findtext("atom:title", default="", namespaces=ARXIV_NS)
                  or "").strip().replace("\n", " ")
-        summary = (entry.findtext("atom:summary", default="", namespaces=ARXIV_NS)
-                   or "").strip()
-        authors = [a.findtext("atom:name", default="", namespaces=ARXIV_NS) or ""
-                   for a in entry.findall("atom:author", ARXIV_NS)]
-        seed = ""
         if title:
             out["title"] = title
-        if authors:
-            seed = "**Authors:** " + ", ".join(a for a in authors if a) + "\n\n"
-        if summary:
-            seed += "**Abstract:**\n" + summary
-        if seed:
-            out["seed"] = seed
     except Exception:
         pass
     return out
@@ -204,7 +192,6 @@ async def fetch_huggingface(url: str) -> dict:
                         "source_type": "md",
                         "content": r.text,
                         "title": f"{title} (Hugging Face)",
-                        "seed": "",
                         "url": url,
                     }
             except Exception:
@@ -305,9 +292,9 @@ async def fetch_web(url: str) -> dict:
     if "html" not in ctype:
         if "pdf" in ctype or low.endswith(".pdf"):
             return {"source_type": "pdf", "content": r.content,
-                    "title": _url_title(url), "seed": "", "url": url}
+                    "title": _url_title(url), "url": url}
         return {"source_type": "md", "content": r.text,
-                "title": _url_title(url), "seed": "", "url": url}
+                "title": _url_title(url), "url": url}
 
     soup = BeautifulSoup(r.content, "html.parser")
     title = _page_title(soup, url)
@@ -323,11 +310,11 @@ async def fetch_web(url: str) -> dict:
             md = await llm.html_to_markdown(soup.get_text("\n", strip=True))
             if md and len(md) > len(text):
                 return {"source_type": "md", "content": f"# {title}\n\n{md}",
-                        "title": title, "seed": "", "url": url}
+                        "title": title, "url": url}
         except Exception:
             pass
         return {"source_type": "md", "content": _naive_md(soup, url, title),
-                "title": title, "seed": "", "url": url}
+                "title": title, "url": url}
 
     return {"source_type": "html+css", "content": str(soup),
-            "title": title, "seed": "", "url": url}
+            "title": title, "url": url}

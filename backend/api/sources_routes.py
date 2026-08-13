@@ -67,8 +67,7 @@ async def import_source(request: Request, url: str = Form(""),
     try:
         existing = await store.find_by_url(info.get("url") or url)
         if existing:
-            added = await _file_into(pid, existing["id"], user, folder,
-                                     seed=info.get("seed", ""))
+            added = await _file_into(pid, existing["id"], user, folder)
             return {
                 "ok": True,
                 "id": existing["id"],
@@ -82,7 +81,6 @@ async def import_source(request: Request, url: str = Form(""),
             info["title"],
             info["source_type"],
             info.get("url") or url,
-            seed=info.get("seed", ""),
         )
         content = info["content"]
         if isinstance(content, str):
@@ -92,7 +90,7 @@ async def import_source(request: Request, url: str = Form(""),
         if info.get("text"):
             await asyncio.to_thread(_write_text, store.text_sidecar(spath),
                                     info["text"])
-        await _file_into(pid, sid, user, folder, seed=info.get("seed", ""))
+        await _file_into(pid, sid, user, folder)
     except HTTPException:
         raise
     except Exception as e:
@@ -100,17 +98,12 @@ async def import_source(request: Request, url: str = Form(""),
     return {"ok": True, "id": sid, "title": info["title"],
             "source_type": info["source_type"], "project_id": pid}
 
-async def _file_into(pid: str, sid: str, user: str, folder: str,
-                     seed: str = "") -> bool:
+async def _file_into(pid: str, sid: str, user: str, folder: str) -> bool:
     added = await projects.add_source(pid, sid, folder=folder, added_by=user)
     if added:
         caps = await projects.get_capabilities(pid)
-        row = await store.get_source(sid)
-        if row and not caps["multi_notes"]:
-            await notes.ensure_single(
-                pid, sid, author=user,
-                seed_content=store.build_note_seed(
-                    row["title"], row["source_type"], row["url"], seed))
+        if not caps["multi_notes"]:
+            await notes.ensure_single(pid, sid, author=user)
     await mirror_to_workspace(user, sid, pid)
     return added
 
@@ -146,12 +139,9 @@ async def source_delete(sid: str):
 
 @router.get("/api/note/{sid}")
 async def get_note(sid: str, user: str = Depends(current_user)):
-    row = await get_source_or_404(sid)
+    await get_source_or_404(sid)
     pid = await projects.personal_project_id(user)
-    page = await notes.ensure_single(
-        pid, sid, author=user,
-        seed_content=store.build_note_seed(row["title"], row["source_type"],
-                                           row["url"]))
+    page = await notes.ensure_single(pid, sid, author=user)
     return {"ok": True, "content": page["content"], "note_id": page["id"],
             "version": page["version"], "blame": page["blame"]}
 

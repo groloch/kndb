@@ -15,6 +15,8 @@ const S = {
   noteDirty: false,
   saveTimer: null,
   streaming: false,
+  quiz: null,          // quiz hub: the loaded quiz
+  quizStats: null,     // quiz hub: its spaced-repetition stats
   qm: null,
   qmEditId: null,
 };
@@ -119,6 +121,9 @@ async function openRef(ref) {
   if (S.streaming) { toast("Wait for the summary to finish first", "warn"); return; }
   if (S.noteDirty) await saveNote();
   S.sel = ref;
+  // Closing is about the selection, not about having a document: a folder and a
+  // standalone note can be closed too.
+  $("#btn-close-res").disabled = !ref;
   if (!ref) return resetNoSource();
   if (ref.kind === "source") return openSource(ref.id);
   if (ref.kind === "note") return openStandalone(ref.id);
@@ -188,7 +193,7 @@ function showCompiled(title, markdown) {
 
 function setToolbar(s) {
   const on = !!s;
-  ["btn-quiz-gen", "btn-quiz-play", "btn-summarize", "btn-edit-tags", "btn-edit-quiz"]
+  ["btn-edit-tags", "btn-quiz", "btn-summarize"]
     .forEach(id => { $(`#${id}`).disabled = !on; });
 }
 
@@ -208,8 +213,13 @@ function resetNoSource() {
   $("#note-preview").classList.remove("hidden");
   $("#note-save-state").textContent = "";
   setToolbar(null);
+  $("#btn-close-res").disabled = true;
   ANCHORS.clear();
 }
+
+// Deselecting is the same path as selecting, so a pending note is saved and the
+// tree drops its highlight along with the viewer and the notes.
+$("#btn-close-res").addEventListener("click", () => TREE.setSelection(null));
 
 async function loadResource(s) {
   $("#res-title").textContent = s.title;
@@ -437,7 +447,115 @@ async function deleteNotePage(nid) {
   }
 }
 
-$("#btn-quiz-gen").addEventListener("click", () => openModal("#modal-quiz-gen"));
+/* ---------- Quiz hub ---------- */
+
+/* One dialog for everything a source's quiz is: how it is going, and the three
+ * things you can do about it. The generator, the player and the question
+ * manager are opened from here rather than from the top bar. */
+
+const BOXES = [
+  { label: "New", max: 0, color: "var(--border-strong)" },
+  { label: "Learning", max: 2, color: "var(--warn)" },
+  { label: "Familiar", max: 4, color: "var(--accent)" },
+  { label: "Mastered", max: Infinity, color: "var(--ok)" },
+];
+
+async function openQuizHub() {
+  if (!S.current) return;
+  S.quiz = null;
+  S.quizStats = null;
+  openModal("#modal-quiz");
+  $("#quiz-hub-source").textContent = S.current.title;
+  $("#quiz-hub-stats").innerHTML = "";
+  $("#quiz-hub-progress").innerHTML = '<p class="muted">Loading…</p>';
+  $("#btn-quiz-play").disabled = true;
+  try {
+    const [quiz, stats] = await Promise.all([
+      api(`/api/quiz/${S.current.id}`),
+      api(`/api/quiz/${S.current.id}/stats`),
+    ]);
+    S.quiz = quiz;
+    S.quizStats = stats.stats || {};
+  } catch (e) {
+    $("#quiz-hub-progress").innerHTML =
+      `<p class="muted">Could not load the quiz: ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  renderQuizHub();
+}
+
+/** Fold the per-question spaced-repetition stats into the few numbers worth
+ *  showing. A question with no `next_review` has never been answered, which
+ *  counts as due. */
+function quizSummary() {
+  const questions = (S.quiz && S.quiz.questions) || [];
+  const per = (S.quizStats && S.quizStats.questions) || {};
+  const now = new Date().toISOString().slice(0, 19) + "Z";
+  const buckets = BOXES.map(() => 0);
+  let played = 0, correct = 0, due = 0, last = "";
+  for (const q of questions) {
+    const st = per[q.id] || {};
+    played += st.times_played || 0;
+    correct += st.times_successful || 0;
+    if (!st.next_review || st.next_review <= now) due++;
+    if ((st.last_played || "") > last) last = st.last_played || "";
+    buckets[BOXES.findIndex(b => (st.box || 0) <= b.max)]++;
+  }
+  return { questions, played, correct, due, last, buckets };
+}
+
+function renderQuizHub() {
+  const { questions, played, correct, due, last, buckets } = quizSummary();
+  const total = questions.length;
+  $("#quiz-hub-stats").innerHTML = [
+    ["questions", total],
+    ["due now", due],
+    ["answers", played],
+    ["avg. score", played ? Math.round(100 * correct / played) + "%" : "–"],
+  ].map(([lbl, num]) =>                            // every value is our own number
+    `<div class="stat"><div class="stat-num">${num}</div>`
+    + `<div class="stat-lbl">${lbl}</div></div>`).join("");
+
+  const prog = $("#quiz-hub-progress");
+  if (!total) {
+    prog.innerHTML = '<p class="muted">No questions yet — generate a quiz from '
+      + "this source, or write questions yourself.</p>";
+  } else {
+    prog.innerHTML =
+      '<div class="qh-bar">'
+      + BOXES.map((b, i) => buckets[i]
+          ? `<span style="flex:${buckets[i]};background:${b.color}"></span>` : "").join("")
+      + '</div><div class="qh-legend">'
+      + BOXES.map((b, i) => `<span><i class="dot" style="background:${b.color}"></i>`
+          + `${b.label} <b>${buckets[i]}</b></span>`).join("")
+      + "</div>"
+      + `<p class="muted qh-when">${last ? "Last answered " + fmtDate(last)
+                                         : "Never played yet"}</p>`;
+  }
+  $("#btn-quiz-play").disabled = !total;
+  $("#quiz-hub-hint").textContent = total
+    ? "Due questions come first; a wrong answer sends one back to the start."
+    : "A quiz is built from your notes, the document, or both.";
+}
+
+$("#btn-quiz").addEventListener("click", openQuizHub);
+
+$("#btn-quiz-manage").addEventListener("click", () => {
+  closeModal("#modal-quiz");
+  openQuizManager();
+});
+
+$("#btn-quiz-gen").addEventListener("click", async () => {
+  if (((S.quiz && S.quiz.questions) || []).length && !await confirmModal({
+    title: "Generate a new quiz",
+    body: "This source already has a quiz. Generating replaces its questions.",
+    hint: "The answers you have given to the current questions are lost with them.",
+    confirm: "Replace the quiz",
+    danger: true,
+  })) return;
+  closeModal("#modal-quiz");
+  openModal("#modal-quiz-gen");
+});
 
 $("#quiz-gen-submit").addEventListener("click", async () => {
   if (!S.current) return;
@@ -455,6 +573,7 @@ $("#quiz-gen-submit").addEventListener("click", async () => {
     closeModal("#modal-quiz-gen");
     toast(`Quiz ready: ${done.questions} questions`, "ok");
     await refreshTree();
+    await openQuizHub();     // back to the hub, now showing the new quiz
   } catch (e) {
     toast("Quiz generation failed: " + e.message, "err", 10000);
   } finally {
@@ -469,16 +588,14 @@ $("#summarize-submit").addEventListener("click", async () => {
   if (S.streaming) { toast("Already summarizing…", "warn"); return; }
   closeModal("#modal-summarize");
 
-  await saveNote();
-  // The summary is appended to a specific note page, so send its id — the
+  await saveNote();   // the summary is appended server-side, under what is saved there
+  // The summary is written into a specific note page, so send its id — the
   // server no longer has a notion of "the" note for a source.
   const body = {
-    scope: $('input[name="su-scope"]:checked').value,
     length: $("#su-length").value,
     language: $("#su-language").value.trim() || "English",
     note_id: S.noteId,
   };
-  const base = $("#note-editor").value || "";
   const editor = $("#note-editor");
   const saveState = $("#note-save-state");
 
@@ -489,11 +606,13 @@ $("#summarize-submit").addEventListener("click", async () => {
   editor.disabled = true;
   saveState.textContent = "summarizing…";
 
+  // What the note already holds stays on screen: the summary lands under it.
+  const before = editor.value.trim();
   let summary = "";
   const paint = () => {
     const preview = $("#note-preview");
-    preview.innerHTML = renderMarkdown(
-      base + (summary ? `\n\n---\n\n## Summary — streaming…\n\n${summary}` : ""));
+    const body = summary ? `${before}\n\n${summary}`.trim() : before;
+    preview.innerHTML = renderMarkdown(body) || '<p class="muted">Summarizing…</p>';
     preview.scrollTop = preview.scrollHeight;
   };
   paint();
@@ -503,8 +622,8 @@ $("#summarize-submit").addEventListener("click", async () => {
       summary += tok;
       paint();
     });
-    await loadNote(S.current);  // reload the finalized notes (summary already appended)
-    toast("Summary appended to your notes", "ok");
+    await loadNote(S.current);  // reload the finalized note (summary already written)
+    toast("Summary appended to your note", "ok");
   } catch (e) {
     if (summary) paint();  // keep whatever streamed so far visible
     toast("Summarize failed: " + e.message, "err", 10000);
@@ -516,15 +635,11 @@ $("#summarize-submit").addEventListener("click", async () => {
 });
 
 $("#btn-quiz-play").addEventListener("click", async () => {
-  if (!S.current) return;
+  if (!S.current || !S.quiz || !S.quiz.questions.length) return;
   try {
-    const quiz = await api(`/api/quiz/${S.current.id}`);
-    if (!quiz.questions || !quiz.questions.length) {
-      toast("No quiz yet — click 'Generate quiz' first", "warn");
-      return;
-    }
     const order = await api(`/api/quiz/${S.current.id}/order`);
-    startQuizSession(quiz, order.questions);
+    closeModal("#modal-quiz");
+    startQuizSession(S.quiz, order.questions);
   } catch (e) {
     toast("Could not start quiz: " + e.message, "err");
   }
@@ -683,7 +798,7 @@ function renderQuizList() {
   const questions = (S.qm && S.qm.questions) || [];
   if (!questions.length) {
     list.innerHTML =
-      '<p class="muted">No questions yet — generate a quiz with “Generate quiz”, or add one below.</p>';
+      '<p class="muted">No questions yet — add one below, or generate a quiz from the Quiz dialog.</p>';
     return;
   }
   list.innerHTML = "";
@@ -766,7 +881,6 @@ async function saveQuizForm() {
   }
 }
 
-$("#btn-edit-quiz").addEventListener("click", openQuizManager);
 $("#qm-add-btn").addEventListener("click", saveQuizForm);
 $("#qm-cancel").addEventListener("click", resetQuizForm);
 $("#qm-question").addEventListener("keydown", e => {
@@ -806,8 +920,8 @@ function showCtxMenu(x, y, s) {
   const menu = $("#ctx-menu");
   menu.innerHTML = "";
   const items = [
-    { label: "Edit quiz…", danger: false },
-    { label: "Edit tags…", danger: false },
+    { label: "Quiz…", danger: false },
+    { label: "Tags…", danger: false },
     { label: "Delete source", danger: true },
   ];
   for (const it of items) {
@@ -817,8 +931,8 @@ function showCtxMenu(x, y, s) {
     b.addEventListener("click", async () => {
       hideCtx();
       if (!S.current || S.current.id !== s.id) await selectSource(s.id, "preview");
-      if (it.label === "Edit quiz…") openQuizManager();
-      else if (it.label === "Edit tags…") editTags();
+      if (it.label === "Quiz…") openQuizHub();
+      else if (it.label === "Tags…") editTags();
       else deleteSource(s.id);
     });
     menu.appendChild(b);
@@ -890,6 +1004,18 @@ function setupSplitter(handle, leftPanel, storageKey, min = 0.14, max = 0.72) {
   });
 }
 
+function setDirFolded(folded) {
+  $("#panel-dir").classList.toggle("folded", folded);
+  const btn = $("#btn-fold-dir");
+  btn.setAttribute("aria-expanded", String(!folded));
+  btn.title = folded ? "Show the library" : "Hide the library";
+  localStorage.setItem("kndb.fold.dir", folded ? "1" : "0");
+}
+
+$("#btn-fold-dir").addEventListener("click", () => {
+  setDirFolded(!$("#panel-dir").classList.contains("folded"));
+});
+
 async function init() {
   await initIdentity();
   S.pid = (KNDB.personal && KNDB.personal.id) || "";
@@ -900,6 +1026,7 @@ async function init() {
   TREE.setProject(S.pid);
   setupSplitter($('.splitter[data-split="dir"]'), $("#panel-dir"), "kndb.w.dir");
   setupSplitter($('.splitter[data-split="res"]'), $("#panel-res"), "kndb.w.res");
+  setDirFolded(localStorage.getItem("kndb.fold.dir") === "1");
   await refreshTree();
   const m = location.hash.match(/^#src=([\w]+)/);
   if (m) {

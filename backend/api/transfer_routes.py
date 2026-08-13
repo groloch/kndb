@@ -7,7 +7,7 @@ from backend.api.deps import (current_user, get_note_or_404,
                               get_project_or_404, get_source_or_404,
                               require_role, writable_project)
 from backend.content import blame
-from backend.data import anchors, notes, projects, store
+from backend.data import anchors, notes, projects
 
 
 router = APIRouter()
@@ -187,9 +187,4 @@ async def mirror_to_workspace(user: str, sid: str, source_pid: str) -> None:
     if personal["id"] == source_pid:
         return
     await projects.add_source(personal["id"], sid, added_by=user)
-    row = await store.get_source(sid)
-    if row:
-        await notes.ensure_single(
-            personal["id"], sid, author=user,
-            seed_content=store.build_note_seed(row["title"], row["source_type"],
-                                               row["url"]))
+    await notes.ensure_single(personal["id"], sid, author=user)

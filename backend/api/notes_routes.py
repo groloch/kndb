@@ -19,11 +19,8 @@ async def list_source_notes(pid: str, sid: str, user: str = Depends(current_user
     caps = await projects.get_capabilities(pid)
     pages = await notes.list_for_source(pid, sid)
     if not pages and not caps["multi_notes"]:
-        from backend.data import store
-
-        row = await get_source_or_404(sid)
-        seed = store.build_note_seed(row["title"], row["source_type"], row["url"])
-        await notes.ensure_single(pid, sid, author=user, seed_content=seed)
+        await get_source_or_404(sid)
+        await notes.ensure_single(pid, sid, author=user)
         pages = await notes.list_for_source(pid, sid)
     return {"ok": True, "notes": pages, "capabilities": caps,
             "colors": await projects.color_map(pid)}

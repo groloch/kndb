@@ -116,7 +116,6 @@ async def summarize(sid: str, body: Optional[dict] = None,
 
     events = services.stream_summarize(
         page["project_id"], sid, nid, user,
-        scope=body.get("scope", "both"),
         length=body.get("length", "medium"),
         language=body.get("language", "English"),
     )

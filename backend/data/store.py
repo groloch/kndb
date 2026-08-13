@@ -36,14 +36,6 @@ def text_sidecar(source_path: str) -> str:
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
-def build_note_seed(title: str, source_type: str, url: str, seed: str = "") -> str:
-    lines = [f"# {title}", ""]
-    if url:
-        lines += [f"- **source**: {url}", f"- **type**: {source_type}", ""]
-    if seed.strip():
-        lines += ["", "---", "", seed.strip(), ""]
-    return "\n".join(lines)
-
 def _row_to_dict(src: Source) -> dict:
     return {
         "id": src.id,
@@ -119,7 +111,7 @@ async def list_sources(q: str = "", pid: str = "") -> list:
     return [to_public(r, await quiz_store.read_stats(pid, r["id"])) for r in hits]
 
 async def create_source(title: str, source_type: str, url: str = "",
-                        tags: str = "", seed: str = "") -> tuple:
+                        tags: str = "") -> tuple:
     """Create the DB row + empty source blob file. Returns ``(sid, abs_path)`` —
     the caller then writes the actual source content into the path."""
     ensure_dirs()

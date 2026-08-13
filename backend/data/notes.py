@@ -155,13 +155,11 @@ async def create(pid: str, *, author: str, source_id: str = "", folder: str = ""
         await s.commit()
     return _to_dict(page)
 
-async def ensure_single(pid: str, source_id: str, *, author: str,
-                        seed_content: str = "") -> dict:
+async def ensure_single(pid: str, source_id: str, *, author: str) -> dict:
     pages = await list_for_source(pid, source_id)
     if pages:
         return await get(pages[0]["id"])
-    return await create(pid, author=author, source_id=source_id,
-                        content=seed_content)
+    return await create(pid, author=author, source_id=source_id)
 
 async def save(nid: str, content: str, *, author: str, role: str,
                base_version: int | None = None) -> dict:

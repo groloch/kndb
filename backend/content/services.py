@@ -304,9 +304,9 @@ async def quiz_order(pid: str, sid: str) -> list:
     return sorted(quiz.get("questions", []), key=key)
 
 async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
-                           scope: str = "both", length: str = "medium",
-                           language: str = "English"):
-    """Summarize, streaming token events; appends the summary to the notes."""
+                           length: str = "medium", language: str = "English"):
+    """Summarize the document, streaming token events; the summary is appended to
+    the note page under a dated heading."""
     try:
         row = await store.get_source(sid)
         if not row:
@@ -314,21 +314,18 @@ async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
         page = await note_store.get(note_id)
         if not page:
             raise ValueError("note page not found")
-        notes, doc = await material_for(scope, row, page["content"])
-        _check_material(scope, notes, doc)
+        doc = await document_text(row)
+        if not doc.strip():
+            raise ValueError("Could not extract any text from this document.")
 
         system = llm.load_prompt(
             "summarization",
             instructions=f"Length: {_LENS.get(length, length)}. Write in {language}.",
         )
         user = (
-            "Material - personal notes:\n"
+            "Source document:\n"
             "=====\n"
-            f"{notes[:6000] or '(no notes provided)'}\n"
-            "=====\n\n"
-            "Material - source document:\n"
-            "=====\n"
-            f"{doc[:10000] or '(no document text provided)'}\n"
+            f"{doc[:10000]}\n"
             "=====\n\n"
             "Write the summary now."
         )
@@ -342,7 +339,7 @@ async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
         summary = text.strip()
         await note_store.append(
             note_id, summary, author=author,
-            header=f"---\n\n## Summary — {_local_now()}")
+            header=f"## Summary — {_local_now()}")
         await quiz_store.touch(pid, sid)
         yield {"type": "done", "chars": len(summary)}
     except Exception as e:
