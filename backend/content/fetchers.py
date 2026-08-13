@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
+from ..core import config
 from ..integrations import llm
 
 UA = {
@@ -15,17 +16,32 @@ UA = {
                    "Chrome/124.0.0.0 Safari/537.36"),
 }
 
-ARXIV_RE = re.compile(
-    r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5}(?:v\d+)?"
-    r"|[a-z\-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?)",
-    re.I,
-)
+ARXIV_ID = (r"[0-9]{4}\.[0-9]{4,5}(?:v\d+)?"
+            r"|[a-z\-]+(?:\.[A-Z]{2})?/\d{7}(?:v\d+)?")
+
+ARXIV_RE = re.compile(rf"arxiv\.org/(?:abs|pdf|html)/({ARXIV_ID})", re.I)
+# huggingface.co/papers/<arxiv id> — a viewer wrapped around the arXiv paper
+HF_PAPER_RE = re.compile(rf"^papers/({ARXIV_ID})(?:/|$)", re.I)
 
 HF_HOSTS = {"huggingface.co", "www.huggingface.co", "hf.co"}
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
-MAX_IMAGE = 3 * 1024 * 1024  # max image file size: 3 MB
-IMG_LIMIT = asyncio.Semaphore(6)  # max concurrent image downloads
+# arXiv renders LaTeX submissions to HTML; ar5iv backfills what arXiv misses.
+ARXIV_HTML_URLS = ("https://arxiv.org/html/{aid}",
+                   "https://ar5iv.labs.arxiv.org/html/{aid}")
+# page chrome wrapped around the LaTeXML <article>, and the inline tags whose
+# text belongs to the enclosing block rather than on a line of its own
+LATEXML_DROP = ("script", "style", "noscript", "iframe", "nav", "header",
+                "footer", "dialog")
+LATEXML_DROP_CLASS = ("ltx_page_navbar", "ltx_TOC", "ltx_page_logo", "ar5iv-footer")
+LATEXML_BLOCK = ("p", "div", "section", "h1", "h2", "h3", "h4", "h5", "h6", "li",
+                 "tr", "table", "figure", "figcaption", "blockquote", "br",
+                 "dt", "dd", "pre")
+# shorter than this means we got an error page, not a paper
+MIN_HTML_TEXT = config.MIN_HTML_CHARS
+
+MAX_IMAGE = config.IMAGE_MAX_BYTES               # largest image inlined
+IMG_LIMIT = asyncio.Semaphore(config.IMAGE_DOWNLOADS)  # concurrent downloads
 
 _CLIENT: httpx.AsyncClient | None = None
 
@@ -62,6 +78,10 @@ async def fetch_by_kind(kind: str, url: str) -> dict:
     """Dispatch. Every fetch returns::
 
         {"source_type", "content" (str|bytes), "title", "seed", "url"}
+
+    plus an optional ``"text"`` — a clean plain-text rendition of the same
+    document, cached alongside the blob and preferred over parsing the blob
+    when the LLM needs the document as text.
     """
     if kind == "arxiv":
         return await fetch_arxiv(url)
@@ -70,6 +90,9 @@ async def fetch_by_kind(kind: str, url: str) -> dict:
     return await fetch_web(url)
 
 async def fetch_arxiv(url: str) -> dict:
+    """The PDF stays the stored blob — it is what the user reads. The HTML
+    rendition rides along as ``text`` because LaTeX-derived markup extracts far
+    more cleanly than anything we can recover from the PDF."""
     m = ARXIV_RE.search(url)
     if not m:
         raise ValueError("not a valid arXiv URL")
@@ -80,38 +103,96 @@ async def fetch_arxiv(url: str) -> dict:
         "seed": "",
         "url": f"https://arxiv.org/abs/{aid}",
     }
-    try:
-        r = await _http_get(f"http://export.arxiv.org/api/query?id_list={aid}", timeout=60.0)
-        if r.status_code < 300:
-            try:
-                root = ET.fromstring(r.content)
-                entry = root.find("atom:entry", ARXIV_NS)
-                if entry is not None:
-                    title = (entry.findtext("atom:title", default="", namespaces=ARXIV_NS)
-                             or "").strip().replace("\n", " ")
-                    summary = (entry.findtext("atom:summary", default="", namespaces=ARXIV_NS)
-                               or "").strip()
-                    authors = [a.findtext("atom:name", default="", namespaces=ARXIV_NS) or ""
-                               for a in entry.findall("atom:author", ARXIV_NS)]
-                    if title:
-                        meta["title"] = title
-                    if authors:
-                        meta["seed"] = "**Authors:** " + ", ".join(a for a in authors if a) + "\n\n"
-                    if summary:
-                        meta["seed"] += "**Abstract:**\n" + summary
-            except Exception:
-                pass
-    except Exception:
-        pass
+    api, pdf, text = await asyncio.gather(
+        _arxiv_api_meta(aid), _arxiv_pdf(aid), _arxiv_html_text(aid),
+    )
+    meta.update(api)
+    meta["content"] = pdf
+    if text:
+        meta["text"] = text
+    return meta
 
+async def _arxiv_pdf(aid: str) -> bytes:
     r = await _http_get(f"https://arxiv.org/pdf/{aid}", timeout=120.0)
     if r.status_code >= 300:
         raise ValueError(f"arXiv PDF download failed with HTTP {r.status_code}")
-    meta["content"] = r.content
-    return meta
+    return r.content
+
+async def _arxiv_api_meta(aid: str) -> dict:
+    """Title/authors/abstract from the arXiv API. Best effort — the import
+    still works off the bare ID when this is unavailable."""
+    out = {}
+    try:
+        r = await _http_get(f"https://export.arxiv.org/api/query?id_list={aid}",
+                            timeout=60.0, follow_redirects=True)
+        if r.status_code >= 300:
+            return out
+        root = ET.fromstring(r.content)
+        entry = root.find("atom:entry", ARXIV_NS)
+        if entry is None:
+            return out
+        title = (entry.findtext("atom:title", default="", namespaces=ARXIV_NS)
+                 or "").strip().replace("\n", " ")
+        summary = (entry.findtext("atom:summary", default="", namespaces=ARXIV_NS)
+                   or "").strip()
+        authors = [a.findtext("atom:name", default="", namespaces=ARXIV_NS) or ""
+                   for a in entry.findall("atom:author", ARXIV_NS)]
+        seed = ""
+        if title:
+            out["title"] = title
+        if authors:
+            seed = "**Authors:** " + ", ".join(a for a in authors if a) + "\n\n"
+        if summary:
+            seed += "**Abstract:**\n" + summary
+        if seed:
+            out["seed"] = seed
+    except Exception:
+        pass
+    return out
+
+async def _arxiv_html_text(aid: str) -> str:
+    """Clean text from arXiv's HTML rendition, or ``""`` when there is none —
+    PDF-only submissions have no LaTeX source to render, and the caller then
+    falls back to extracting text from the PDF."""
+    for template in ARXIV_HTML_URLS:
+        try:
+            r = await _http_get(template.format(aid=aid), timeout=90.0,
+                                follow_redirects=True)
+            if r.status_code >= 300:
+                continue
+            text = await asyncio.to_thread(latexml_text, r.content)
+            if len(text) >= MIN_HTML_TEXT:
+                return text
+        except Exception:
+            continue
+    return ""
+
+def latexml_text(html: bytes | str) -> str:
+    """Flatten a LaTeXML-generated paper into plain text: page chrome dropped,
+    math restored to its LaTeX source, one block element per line."""
+    soup = BeautifulSoup(html, "html.parser")
+    root = soup.find("article") or soup.find(class_="ltx_page_main") or soup.body
+    if root is None:
+        return ""
+    for tag in root.find_all(LATEXML_DROP):
+        tag.decompose()
+    for cls in LATEXML_DROP_CLASS:
+        for tag in root.find_all(class_=cls):
+            tag.decompose()
+    for node in root.find_all("math"):
+        alt = (node.get("alttext") or "").strip()
+        node.replace_with(f" ${alt}$ " if alt else " ")
+    for tag in root.find_all(LATEXML_BLOCK):
+        tag.insert_before("\n")
+        tag.insert_after("\n")
+    text = re.sub(r"[^\S\n]+", " ", root.get_text(" "))
+    return re.sub(r"\n{3,}", "\n\n", re.sub(r" ?\n ?", "\n", text)).strip()
 
 async def fetch_huggingface(url: str) -> dict:
     path = (urlparse(url).path or "").strip("/")
+    paper = HF_PAPER_RE.match(path)
+    if paper:  # a paper page is a viewer around arXiv — import the paper itself
+        return await fetch_arxiv(f"https://arxiv.org/abs/{paper.group(1)}")
     if path and not path.startswith("papers/"):
         for branch in ("main", "master"):
             readme_url = f"https://huggingface.co/{path}/raw/{branch}/README.md"
@@ -236,10 +317,10 @@ async def fetch_web(url: str) -> dict:
     await _embed_images(soup, url)
 
     text = soup.get_text(" ", strip=True)
-    if len(text) < 200:
+    if len(text) < config.MIN_PAGE_CHARS:
         try:
-            raw = soup.get_text("\n", strip=True)[:12000]
-            md = await llm.html_to_markdown(raw)
+            # html_to_markdown applies limits.web_markdown_chars itself
+            md = await llm.html_to_markdown(soup.get_text("\n", strip=True))
             if md and len(md) > len(text):
                 return {"source_type": "md", "content": f"# {title}\n\n{md}",
                         "title": title, "seed": "", "url": url}

@@ -25,6 +25,14 @@ def absdir(rel: str) -> str:
 def make_id() -> str:
     return "src_" + secrets.token_hex(6)
 
+def text_sidecar(source_path: str) -> str:
+    """Path of the cached plain-text rendition sitting next to a source blob.
+
+    Optional: present only when the fetcher had a cleaner text rendition than
+    the blob itself (arXiv HTML next to the PDF). No extension in
+    :data:`TYPE_EXT` is ``.txt``, so this never collides with a real source."""
+    return os.path.splitext(source_path)[0] + ".txt"
+
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -44,7 +52,6 @@ def _row_to_dict(src: Source) -> dict:
         "source_path": os.path.join(DATA_DIR, src.source_path),
         "url": src.url,
         "tags": src.tags,
-        "category": src.category,
         "fetched_at": src.fetched_at,
     }
 
@@ -52,7 +59,7 @@ def to_public(row: dict, stats: dict | None = None) -> dict:
     st = stats or {}
     return {
         "id": row["id"], "title": row["title"], "source_type": row["source_type"],
-        "url": row["url"], "tags": row["tags"], "category": row["category"],
+        "url": row["url"], "tags": row["tags"],
         "fetched_at": row["fetched_at"],
         "num_questions": st.get("num_questions", 0),
         "date_added": st.get("date_added", row["fetched_at"]),
@@ -112,7 +119,7 @@ async def list_sources(q: str = "", pid: str = "") -> list:
     return [to_public(r, await quiz_store.read_stats(pid, r["id"])) for r in hits]
 
 async def create_source(title: str, source_type: str, url: str = "",
-                        tags: str = "", category: str = "", seed: str = "") -> tuple:
+                        tags: str = "", seed: str = "") -> tuple:
     """Create the DB row + empty source blob file. Returns ``(sid, abs_path)`` —
     the caller then writes the actual source content into the path."""
     ensure_dirs()
@@ -126,30 +133,14 @@ async def create_source(title: str, source_type: str, url: str = "",
 
     src = Source(
         id=sid, title=title, source_type=source_type, source_path=rel,
-        url=url, tags=tags, category=category, fetched_at=now,
+        url=url, tags=tags, fetched_at=now,
     )
     async with db.session() as s:
         s.add(src)
         await s.commit()
     return sid, abs_path
 
-async def bulk_restore(*, id: str, title: str, source_type: str, source_path: str,
-                       url: str = "", tags: str = "", category: str = "",
-                       fetched_at: str = "", notes: str = "", quiz: str = "",
-                       stats: str = "") -> None:
-    """One-time migration helper: insert a fully-populated row verbatim."""
-    if not fetched_at:
-        fetched_at = _ts()
-    src = Source(
-        id=id, title=title, source_type=source_type, source_path=source_path,
-        url=url, tags=tags, category=category, fetched_at=fetched_at,
-        notes=notes or "", quiz=quiz or "", stats=stats or "",
-    )
-    async with db.session() as s:
-        s.add(src)
-        await s.commit()
-
-async def update_meta(sid: str, title=None, tags=None, category=None) -> None:
+async def update_meta(sid: str, title=None, tags=None) -> None:
     async with db.session() as s:
         src = (await s.execute(select(Source).where(Source.id == sid))).scalar_one_or_none()
         if src is None:
@@ -158,8 +149,6 @@ async def update_meta(sid: str, title=None, tags=None, category=None) -> None:
             src.title = title
         if tags is not None:
             src.tags = tags
-        if category is not None:
-            src.category = category
         await s.commit()
 
 async def delete_source(sid: str) -> None:
@@ -170,8 +159,11 @@ async def delete_source(sid: str) -> None:
             await s.delete(src)
             await s.commit()
     await projects.remove_source_everywhere(sid)  # drop project links
-    if row and os.path.exists(row["source_path"]):
-        try:
-            os.remove(row["source_path"])
-        except OSError:
-            pass
+    if not row:
+        return
+    for path in (row["source_path"], text_sidecar(row["source_path"])):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass

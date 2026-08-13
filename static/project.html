@@ -98,6 +98,7 @@
         <div id="res-empty" class="empty">Select a source from the library to read it and<br>
           take notes on it next to it.</div>
         <iframe id="res-frame" class="res-frame hidden" sandbox="allow-same-origin allow-scripts"></iframe>
+        <div id="res-pdf" class="pdfview hidden"></div>
         <div id="res-md" class="res-md prose hidden"></div>
       </div>
     </section>
@@ -113,10 +114,12 @@
         <div id="note-preview" class="note-preview prose hidden">
           <p class="muted">Select a source in the library to read and edit its notes.</p>
         </div>
+        <div id="anchor-layer" class="anchor-layer"></div>
         <div id="note-mirror" class="note-mirror" aria-hidden="true"></div>
       </div>
       <div class="note-foot">
         <span id="note-hint" class="muted">Ctrl+D toggles preview</span>
+        <span id="note-anchor-state" class="save-state warn"></span>
         <span id="note-save-state" class="save-state"></span>
         <span class="foot-actions">
           <button id="btn-send" class="btn small" title="Send the selected text elsewhere">Send to…</button>
@@ -162,12 +165,8 @@
         <div id="prj-members" class="mini-list"></div>
         <div class="member-add">
           <input id="member-name" class="input" placeholder="member name" spellcheck="false">
-          <select id="member-role" class="input">
-            <option value="owner">owner</option>
-            <option value="maintainer">maintainer</option>
-            <option value="contributor" selected>contributor</option>
-            <option value="spectator">spectator</option>
-          </select>
+          <!-- options come from permissions: in kndb.yaml, via /api/me -->
+          <select id="member-role" class="input"></select>
           <button id="btn-add-member" class="btn small">+ Add</button>
         </div>
         <p class="muted hint">No accounts yet — members are placeholders for the future
@@ -243,9 +242,22 @@
 </div>
 
 <div id="toast" class="toast"></div>
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<!-- vendored by dev_tools/fetch_vendor.py; miniMarkdown in common.js
+     covers the case where they are missing -->
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<div id="link-scrim" class="link-scrim"></div>
+<div id="link-hint" class="link-hint">
+  Select the passage in the document<span class="sep">·</span><b>Esc</b> to cancel
+</div>
+<div id="link-hint-note" class="link-hint-note">
+  Select the sentence in your note<span class="sep">·</span><b>Esc</b> to cancel
+</div>
+
 <script src="/static/common.js"></script>
+<script src="/static/pdfview.js"></script>
+<script src="/static/surface.js"></script>
+<script src="/static/anchors.js"></script>
 <script src="/static/tree.js"></script>
 <script src="/static/project.js"></script>
 </body>

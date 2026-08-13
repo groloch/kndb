@@ -227,7 +227,7 @@ function makeTree(cfg) {
   }
 
   /** The unfolded half of a source row: what the flat personal list used to
-   *  show inline — tags first, since they are what the search box matches. */
+   *  show inline — the tags the search box matches, and the quiz count. */
   function detailRow(s, depth) {
     const el = document.createElement("div");
     el.className = "tree-detail" + (isSel("source", s.id) ? " active" : "");
@@ -235,11 +235,10 @@ function makeTree(cfg) {
     el.style.paddingLeft = 6 + depth * 14 + 20 + "px";
     const tags = splitTags(s.tags)
       .map(t => '<span class="chip">@' + escapeHtml(t) + "</span>").join("");
-    const cat = s.category ? '<span class="cat">' + escapeHtml(s.category) + "</span>" : "";
     const q = (cfg.showQuestions && cfg.showQuestions())
       ? '<span class="qcount" title="questions in quiz">' + (s.num_questions || 0) + "Q</span>"
       : "";
-    el.innerHTML = (cat + tags || '<span class="muted tree-none">no tags</span>') + q;
+    el.innerHTML = (tags || '<span class="muted tree-none">no tags</span>') + q;
     return el;
   }
 

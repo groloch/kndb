@@ -251,5 +251,7 @@ def _scan_json(text: str, start: int) -> str:
 
 async def html_to_markdown(content: str) -> str:
     system = load_prompt("web_to_markdown")
-    user = "Raw website content:\n=====\n" + str(content)[:14000] + "\n====="
-    return await chat(system, user, max_tokens=2500, temperature=0.3)
+    user = ("Raw website content:\n=====\n"
+            + str(content)[:config.WEB_MD_CHARS] + "\n=====")
+    return await chat(system, user, max_tokens=config.WEB_MD_MAX_TOKENS,
+                      temperature=0.3)

@@ -104,7 +104,6 @@ body.resizing iframe { pointer-events: none; }
 .search:focus { border-color: var(--accent); }
 
 .dir-list { flex: 1; overflow-y: auto; padding: 6px 8px 12px; }
-.cat { font-size: 11px; color: var(--muted); }
 .qcount { margin-left: auto; font-size: 11px; color: var(--muted); }
 .del {
   border: none; background: none; color: var(--muted);
@@ -133,11 +132,6 @@ body.resizing iframe { pointer-events: none; }
   background: #fff; }
 .res-frame { flex: 1; width: 100%; border: 0; background: #fff; }
 .res-md { flex: 1; overflow-y: auto; padding: 16px 22px; }
-.res-footer {
-  display: flex; gap: 8px; padding: 8px 12px;
-  border-top: 1px solid var(--border); flex: 0 0 auto;
-}
-.res-footer .input { flex: 1; min-width: 0; }
 
 .note-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column;
   position: relative; }
@@ -342,7 +336,7 @@ select.input { padding: 6px 8px; }
 .tree-row .del { opacity: 0; }
 .tree-row:hover .del { opacity: 1; }
 
-/* The unfolded half of a source row: tags, category and quiz count. Row and
+/* The unfolded half of a source row: tags and quiz count. Row and
    tag line are two elements but one box, so the radius, the border and the
    selection highlight are shared between them. */
 .tree-detail {
@@ -616,3 +610,250 @@ select.input { padding: 6px 8px; }
 .ov-src-row:hover { border-color: var(--accent); background: #fafbff; }
 .ov-src-row .mini-name { color: var(--text); font-weight: 500; }
 .ov-more { margin-top: 6px; font-size: 12px; }
+
+/* ---------- PDF viewer ---------- */
+
+/* Our own renderer, so that a passage can be selected and pointed at by a
+ * note. The .textLayer rules below are pdf.js's own, flattened out of its
+ * nested stylesheet: invisible text, positioned span by span over the canvas,
+ * which is what makes selection line up with what you see. */
+
+.pdfview { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #f3f3ef; }
+
+.pdf-bar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.pdf-gap { flex: 1; }
+.pdf-bar .btn.small { padding: 2px 8px; line-height: 1.4; }
+.pdf-pageno {
+  width: 44px; text-align: center; font: inherit; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px;
+  background: var(--bg); color: var(--text);
+}
+.pdf-status { font-size: 12px; }
+
+.pdf-scroll {
+  /* Positioned so that a page's offsetTop is measured against the scroller:
+     page paging, "which page am I on" and anchor scrolling all rely on it. */
+  position: relative;
+  flex: 1; min-height: 0; overflow: auto;
+  padding: 10px 0; display: flex; flex-direction: column;
+  align-items: center; gap: 10px;
+}
+
+.pdf-page {
+  position: relative; flex: 0 0 auto;
+  background: #fff; box-shadow: 0 1px 4px rgba(20, 25, 40, .18);
+}
+.pdf-canvas-wrap { position: absolute; inset: 0; }
+.pdf-canvas-wrap canvas { display: block; }
+
+.textLayer {
+  position: absolute; inset: 0; overflow: clip;
+  text-align: initial; opacity: 1; line-height: 1;
+  letter-spacing: normal; word-spacing: normal;
+  text-size-adjust: none; forced-color-adjust: none;
+  transform-origin: 0 0; caret-color: CanvasText; z-index: 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.textLayer span, .textLayer br {
+  color: transparent; position: absolute; white-space: pre;
+  cursor: text; transform-origin: 0% 0%; user-select: text;
+}
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.textLayer .markedContent { display: contents; }
+.textLayer span[role="img"] { user-select: none; cursor: default; }
+.textLayer ::selection { background: rgba(74, 108, 247, .32); }
+
+/* ---------- Anchors: note sentences grounded in the document ---------- */
+
+/* A textarea cannot style a range, so links are drawn on a layer over it and
+ * kept in step with an inner track, the same trick the blame gutter uses. The
+ * layer never takes the pointer — the dot and the menu do — so selecting and
+ * typing behave exactly as they did before. */
+
+.anchor-layer {
+  position: absolute; inset: 0; overflow: hidden;
+  pointer-events: none; z-index: 3;
+}
+.anchor-track { position: absolute; top: 0; left: 0; width: 100%; }
+
+.anchor-mark {
+  position: absolute;
+  border-bottom: 2px dotted currentColor;
+  transition: background .2s;
+}
+.anchor-mark.flash { background: rgba(74, 108, 247, .22); }
+
+.anchor-dot {
+  position: absolute; left: 7px;
+  width: 8px; height: 8px; padding: 0;
+  border: 0; border-radius: 50%;
+  pointer-events: auto; cursor: pointer;
+  opacity: .8; transition: transform .12s, opacity .12s;
+}
+.anchor-dot:hover { opacity: 1; transform: scale(1.35); }
+.anchor-dot.flash { transform: scale(1.6); opacity: 1; }
+
+/* The sentence waiting for a passage: bright enough to read through the scrim. */
+.anchor-pending {
+  position: absolute;
+  background: rgba(74, 108, 247, .3);
+  outline: 1px solid var(--accent);
+}
+
+.note-editor.following { cursor: pointer; }
+
+.anchor-menu {
+  position: absolute; z-index: 5;
+  box-shadow: var(--shadow); border-radius: 6px;
+}
+.anchor-menu .btn { white-space: nowrap; }
+
+.anchor-chip {
+  position: absolute; left: 50%; bottom: 12px; z-index: 5;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px 6px 12px; font-size: 12px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 999px; box-shadow: var(--shadow);
+}
+
+/* Linking mode: everything dims except the document, which stays live. */
+
+.link-scrim, .link-hint { display: none; }
+
+body.linking .link-scrim {
+  display: block; position: fixed; inset: 0; z-index: 40;
+  background: rgba(20, 25, 40, .45);
+}
+body.linking #panel-res { position: relative; z-index: 41; }
+body.linking .link-hint {
+  display: flex; align-items: center; gap: 8px;
+  position: fixed; z-index: 42; top: 14px; left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 14px; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow); font-size: 12px;
+}
+.link-hint .sep { color: var(--muted); }
+.link-hint b {
+  font-family: ui-monospace, Consolas, monospace; font-size: 11px;
+  padding: 1px 5px; border: 1px solid var(--border-strong); border-radius: 4px;
+}
+
+/* Anchored passages in the document. Positioned in percentages of the page, so
+ * they follow the page at any zoom, and painted under the invisible text layer
+ * so they never block a selection. */
+
+.pdf-hl { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+.pdf-hl-rect {
+  position: absolute; background: var(--accent);
+  opacity: .22; border-radius: 2px;
+  transition: opacity .25s;
+}
+.pdf-hl-rect.flash { opacity: .55; }
+
+.save-state.warn { color: var(--warn); }
+
+/* ---------- Anchors on HTML surfaces ---------- */
+
+/* Rendered markdown, an HTML source in its frame, and the rendered note all
+ * carry the same links in the same colours. Rectangles are absolutely
+ * positioned inside the scrolling content, so they travel with it, and never
+ * take the pointer — clicks are hit-tested — so text over a highlight stays
+ * selectable and can be linked again. */
+
+.anchor-overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 0;
+  pointer-events: none; z-index: 4;
+}
+.anchor-hl {
+  position: absolute; background: var(--accent);
+  opacity: .2; border-radius: 2px;
+}
+.anchor-hl.flash, .pdf-hl-rect.flash, .anchor-mark.flash {
+  animation: anchor-pulse 1.5s ease-out;
+}
+
+/* Two beats, so the eye catches which one moved even on a page full of them. */
+@keyframes anchor-pulse {
+  0%   { opacity: .2; }
+  12%  { opacity: .75; }
+  35%  { opacity: .25; }
+  55%  { opacity: .7; }
+  100% { opacity: .2; }
+}
+.anchor-mark.flash { background: rgba(74, 108, 247, .25); }
+
+.anchor-menu.floating { position: fixed; z-index: 60; }
+
+.anchor-chooser {
+  position: fixed; z-index: 60; min-width: 220px; max-width: 300px;
+  padding: 4px; background: var(--panel);
+  border: 1px solid var(--border-strong); border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.anchor-chooser-head {
+  padding: 4px 8px 6px; font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .4px;
+}
+.anchor-chooser-item {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 6px 8px; border: 0; border-radius: 5px;
+  background: none; text-align: left; cursor: pointer; font: inherit;
+  font-size: 12px; color: var(--text);
+}
+.anchor-chooser-item:hover { background: #f0f0ec; }
+.anchor-chooser-item .dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+}
+.anchor-chooser-text {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Linking the other way round: the note is what stays lit. */
+
+.link-hint-note { display: none; }
+body.linking-note .link-scrim {
+  display: block; position: fixed; inset: 0; z-index: 40;
+  background: rgba(20, 25, 40, .45);
+}
+body.linking-note #panel-note { position: relative; z-index: 41; }
+body.linking-note .link-hint-note {
+  display: flex; align-items: center; gap: 8px;
+  position: fixed; z-index: 42; top: 14px; left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 14px; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow); font-size: 12px;
+}
+body.linking-note .link-hint-note b {
+  font-family: ui-monospace, Consolas, monospace; font-size: 11px;
+  padding: 1px 5px; border: 1px solid var(--border-strong); border-radius: 4px;
+}
+body.linking-note .note-editor { cursor: crosshair; }
+
+/* A link has to look like one. The overlays never take the pointer — that is
+   what keeps the text under them selectable — so the cursor is set on the
+   surface while a hit-test says the pointer is over a link, and has to reach
+   the children that set a cursor of their own (the PDF text layer). */
+
+.anchor-hot, .anchor-hot *,
+.pdf-scroll.anchor-hot, .pdf-scroll.anchor-hot .textLayer span { cursor: pointer; }
+
+.anchor-hl { transition: opacity .12s; }
+.anchor-hl.hover { opacity: .42; }
+.pdf-hl-rect.hover { opacity: .45; }

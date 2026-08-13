@@ -5,13 +5,13 @@ import time
 from sqlalchemy import delete, select
 
 from ..content import blame
-from ..core import db
+from ..core import config, db
 from ..core.db import NotePage
-from . import projects
+from . import anchors, projects
 
 
 README = "README"
-_EDIT_ANY = ("maintainer", "owner")
+_EDIT_ANY = config.EDIT_OTHERS_ROLES   # permissions.grants.edit_others in kndb.yaml
 
 
 class NoteConflict(Exception):
@@ -72,7 +72,8 @@ def _to_dict(p: NotePage, with_content: bool = True) -> dict:
 
 def deletable_by(page: dict, user: str, role: str) -> str:
     if role not in _EDIT_ANY:
-        return f"deleting a note page needs maintainer or owner; you are {role}"
+        return (f"deleting a note page needs {' or '.join(_EDIT_ANY)}; "
+                f"you are {role}")
     others = [a for a in page.get("authors") or [] if a and a != user]
     if others:
         return (f"this page holds text written by {', '.join(others)} — only a "
@@ -238,6 +239,9 @@ async def rename(nid: str, *, name: str = None, folder: str = None,
         await s.commit()
     return _to_dict(p, with_content=False)
 
+# Anchors hang off a note page, so every path that drops pages drops theirs
+# with them: deleting a page, unlinking a source, deleting a project.
+
 async def remove(nid: str) -> bool:
     async with db.session() as s:
         p = (await s.execute(select(NotePage).where(NotePage.id == nid))).scalar_one_or_none()
@@ -245,20 +249,24 @@ async def remove(nid: str) -> bool:
             return False
         await s.delete(p)
         await s.commit()
+    await anchors.delete_for_note(nid)
     return True
 
 async def delete_for_project(pid: str) -> None:
     async with db.session() as s:
         await s.execute(delete(NotePage).where(NotePage.project_id == pid))
         await s.commit()
+    await anchors.delete_for_project(pid)
 
 async def delete_for_source(pid: str | None, source_id: str) -> None:
-    stmt = delete(NotePage).where(NotePage.source_id == source_id)
+    stmt = select(NotePage.id).where(NotePage.source_id == source_id)
     if pid is not None:
         stmt = stmt.where(NotePage.project_id == pid)
     async with db.session() as s:
-        await s.execute(stmt)
+        doomed = (await s.execute(stmt)).scalars().all()
+        await s.execute(delete(NotePage).where(NotePage.id.in_(doomed)))
         await s.commit()
+    await anchors.delete_for_notes(list(doomed))
 
 async def move_folder(pid: str, path: str, new_path: str) -> None:
     async with db.session() as s:

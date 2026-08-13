@@ -2,9 +2,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.api.deps import (current_user, get_note_or_404,
-                              get_project_or_404, get_source_or_404,
-                              require_role, writable_project)
+from backend.api.deps import (EDIT_OTHERS, WRITE, current_user,
+                              get_note_or_404, get_project_or_404,
+                              get_source_or_404, require_role,
+                              writable_project)
 from backend.data import notes, projects
 
 
@@ -64,8 +65,8 @@ async def read_note(nid: str, user: str = Depends(current_user)):
     role = await require_role(page["project_id"], user)
     caps = await projects.get_capabilities(page["project_id"])
     return {"ok": True, "note": page, "role": role,
-            "can_edit": role != "spectator",
-            "can_edit_others": role in ("maintainer", "owner"),
+            "can_edit": role in WRITE,
+            "can_edit_others": role in EDIT_OTHERS,
             "can_delete": not notes.deletable_by(page, user, role),
             "show_blame": caps["show_blame"],
             "colors": await projects.color_map(page["project_id"])}
@@ -75,8 +76,7 @@ async def save_note(nid: str, body: Optional[dict] = None,
                     user: str = Depends(current_user)):
     body = body or {}
     page = await get_note_or_404(nid)
-    role = await require_role(page["project_id"], user,
-                              "owner", "maintainer", "contributor")
+    role = await require_role(page["project_id"], user, *WRITE)
     content = body.get("content")
     if content is None:
         raise HTTPException(400, "missing content")
@@ -94,9 +94,8 @@ async def patch_note(nid: str, body: Optional[dict] = None,
                      user: str = Depends(current_user)):
     body = body or {}
     page = await get_note_or_404(nid)
-    role = await require_role(page["project_id"], user,
-                              "owner", "maintainer", "contributor")
-    if page["created_by"] != user and role not in ("maintainer", "owner"):
+    role = await require_role(page["project_id"], user, *WRITE)
+    if page["created_by"] != user and role not in EDIT_OTHERS:
         raise HTTPException(403, "only maintainers can rename someone else's note")
     out = await notes.rename(nid, name=body.get("name"), folder=body.get("folder"),
                              position=body.get("position"))

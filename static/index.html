@@ -57,11 +57,8 @@
     <div id="res-body" class="res-body">
       <div id="res-empty" class="empty">No source selected.<br>Import a paper, a website or a file with <b>+ Import</b>.</div>
       <iframe id="res-frame" class="res-frame hidden" sandbox="allow-same-origin allow-scripts"></iframe>
+      <div id="res-pdf" class="pdfview hidden"></div>
       <div id="res-md" class="res-md prose hidden"></div>
-    </div>
-    <div id="res-footer" class="res-footer hidden">
-      <input id="meta-category" class="input" placeholder="category / folder (e.g. math/analysis)">
-      <button id="meta-save" class="btn small">Save meta</button>
     </div>
   </section>
   <div class="splitter" data-split="res"></div>
@@ -73,9 +70,12 @@
       <div id="note-preview" class="note-preview prose hidden">
         <p class="muted">Select a source in the directory to read and edit its notes.</p>
       </div>
+      <div id="anchor-layer" class="anchor-layer"></div>
+      <div id="note-mirror" class="note-mirror" aria-hidden="true"></div>
     </div>
     <div class="note-foot">
       <span id="note-hint" class="muted">Ctrl+D toggles preview</span>
+      <span id="note-anchor-state" class="save-state warn"></span>
       <span id="note-save-state" class="save-state"></span>
     </div>
   </section>
@@ -189,9 +189,22 @@
 
 <div id="toast" class="toast"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<!-- vendored by dev_tools/fetch_vendor.py; miniMarkdown in common.js
+     covers the case where they are missing -->
+<script src="/static/vendor/marked.min.js"></script>
+<script src="/static/vendor/purify.min.js"></script>
+<div id="link-scrim" class="link-scrim"></div>
+<div id="link-hint" class="link-hint">
+  Select the passage in the document<span class="sep">·</span><b>Esc</b> to cancel
+</div>
+<div id="link-hint-note" class="link-hint-note">
+  Select the sentence in your note<span class="sep">·</span><b>Esc</b> to cancel
+</div>
+
 <script src="/static/common.js"></script>
+<script src="/static/pdfview.js"></script>
+<script src="/static/surface.js"></script>
+<script src="/static/anchors.js"></script>
 <script src="/static/tree.js"></script>
 <script src="/static/app.js"></script>
 </body>

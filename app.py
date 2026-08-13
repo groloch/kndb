@@ -5,9 +5,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.api import (learning_routes, llm_routes, notes_routes,
-                         pages_routes, projects_routes, sources_routes,
-                         transfer_routes)
+from backend.api import (anchors_routes, learning_routes, llm_routes,
+                         notes_routes, pages_routes, projects_routes,
+                         sources_routes, transfer_routes)
 from backend.content import fetchers
 from backend.core import config, db, migrations
 from backend.data import store, users
@@ -49,6 +49,7 @@ app.include_router(sources_routes.router)
 app.include_router(learning_routes.router)
 app.include_router(projects_routes.router)
 app.include_router(notes_routes.router)
+app.include_router(anchors_routes.router)
 app.include_router(transfer_routes.router)
 app.include_router(pages_routes.router)
 

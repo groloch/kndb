@@ -25,11 +25,11 @@ def default_quiz(sid: str) -> dict:
     return {"source_id": sid, "updated_at": _ts(), "questions": []}
 
 def new_stats(title: str = "", source_type: str = "", tags: str = "",
-              category: str = "", url: str = "") -> dict:
+              url: str = "") -> dict:
     now = _ts()
     return {
         "title": title, "source_type": source_type, "tags": tags,
-        "category": category, "url": url, "date_added": now,
+        "url": url, "date_added": now,
         "date_last_modified": now, "num_questions": 0, "questions": {},
     }
 

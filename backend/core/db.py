@@ -25,11 +25,7 @@ class Source(Base):
     source_path: Mapped[str] = mapped_column(String(500), default="")  # rel to DATA_DIR
     url: Mapped[str] = mapped_column(String(2000), default="")
     tags: Mapped[str] = mapped_column(String(500), default="")
-    category: Mapped[str] = mapped_column(String(500), default="")
     fetched_at: Mapped[str] = mapped_column(String(40), default="")
-    notes: Mapped[str] = mapped_column(Text, default="")  # legacy
-    quiz: Mapped[str] = mapped_column(Text, default="")   # legacy JSON
-    stats: Mapped[str] = mapped_column(Text, default="")  # legacy JSON
 
 
 Index("ix_sources_url", Source.url)  # dedup lookups by import URL
@@ -65,7 +61,7 @@ class ProjectMember(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_id: Mapped[str] = mapped_column(String(40), index=True)
     name: Mapped[str] = mapped_column(String(120), default="")
-    role: Mapped[str] = mapped_column(String(20), default="contributor")
+    role: Mapped[str] = mapped_column(String(20), default=config.DEFAULT_ROLE)
     color: Mapped[str] = mapped_column(String(20), default="")  # blame gutter
 
 
@@ -112,6 +108,31 @@ class NotePage(Base):
     created_at: Mapped[str] = mapped_column(String(40), default="")
     updated_at: Mapped[str] = mapped_column(String(40), default="")
     origin: Mapped[str] = mapped_column(Text, default="")  # JSON provenance
+
+
+class NoteAnchor(Base):
+    """A sentence of a note page tied to a passage of a source.
+
+    Both ends are quote locators (JSON: exact/prefix/suffix plus a char offset
+    used only as a hint), so an anchor survives edits on either side and never
+    needs a marker inside the note text. The note content is not touched by
+    this table at all — see plan-anchors.md.
+    """
+
+    __tablename__ = "note_anchors"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)  # anc_<hex>
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    note_id: Mapped[str] = mapped_column(String(40), index=True)
+    source_id: Mapped[str] = mapped_column(String(40), default="")
+    note_loc: Mapped[str] = mapped_column(Text, default="")  # JSON locator
+    doc_loc: Mapped[str] = mapped_column(Text, default="")   # JSON locator
+    created_by: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+# Every anchor drawn over one document, for the multi-author overlay.
+Index("ix_note_anchor_doc", NoteAnchor.project_id, NoteAnchor.source_id)
 
 
 class SourceQuiz(Base):

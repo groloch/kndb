@@ -18,15 +18,19 @@ _COLUMNS = {
     "project_sources": {"folder": "TEXT DEFAULT ''", "added_by": "TEXT DEFAULT ''"},
 }
 
+# v1 kept the personal store on the source row, and a category that tags made
+# redundant. Dropped only after ``_unify_workspace`` has moved their content out.
+_DROPPED = {"sources": ("notes", "quiz", "stats", "category")}
+
 _UNIFY = "unify_v2"
 
 
 async def run() -> None:
     await _add_missing_columns()
-    if await _done(_UNIFY):
-        return
-    await _unify_workspace()
-    await _mark(_UNIFY)
+    if not await _done(_UNIFY):
+        await _unify_workspace()
+        await _mark(_UNIFY)
+    await _drop_legacy_columns()
 
 async def _add_missing_columns() -> None:
     async with db.session() as s:
@@ -38,6 +42,22 @@ async def _add_missing_columns() -> None:
             for name, ddl in cols.items():
                 if name not in have:
                     await s.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        await s.commit()
+
+async def _drop_legacy_columns() -> None:
+    """Remove columns the models no longer declare.
+
+    They are ``NOT NULL`` in every database the old models built, so leaving
+    them would make the first insert after this release fail — the ORM stopped
+    naming them. Runs after the v1 step, which is the one thing that still reads
+    them."""
+    async with db.session() as s:
+        for table, cols in _DROPPED.items():
+            have = {r[1] for r in
+                    (await s.execute(text(f"PRAGMA table_info({table})"))).all()}
+            for name in cols:
+                if name in have:
+                    await s.execute(text(f"ALTER TABLE {table} DROP COLUMN {name}"))
         await s.commit()
 
 async def _done(name: str) -> bool:
@@ -64,9 +84,8 @@ async def _unify_workspace() -> None:
     user = await users.ensure(projects.DEFAULT_USER)
     pid = await projects.personal_project_id(user["name"])
 
+    rows = await _legacy_source_rows()
     async with db.session() as s:
-        rows = (await s.execute(text(
-            "SELECT id, notes, quiz, stats FROM sources"))).all()
         existing_projects = (await s.execute(text(
             "SELECT id FROM projects WHERE kind != 'personal' "
             "OR kind IS NULL"))).scalars().all()
@@ -81,6 +100,20 @@ async def _unify_workspace() -> None:
 
     for proj_id in existing_projects:
         await _assign_member_colors(proj_id)
+
+async def _legacy_source_rows() -> list:
+    """The notes, quiz and stats a v1 source row carried inline.
+
+    A database created after the split has no such columns — there is nothing to
+    carry over and the SELECT would simply fail, so ask SQLite what the table
+    actually has before reading it."""
+    async with db.session() as s:
+        cols = {r[1] for r in
+                (await s.execute(text("PRAGMA table_info(sources)"))).all()}
+        if not {"notes", "quiz", "stats"} <= cols:
+            return []
+        return (await s.execute(text(
+            "SELECT id, notes, quiz, stats FROM sources"))).all()
 
 async def _restore_quiz(pid: str, sid: str, quiz: str, stats: str) -> None:
     from ..data import quiz as quiz_store

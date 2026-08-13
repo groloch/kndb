@@ -2,9 +2,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.api.deps import (current_user, get_project_or_404,
-                              get_source_or_404, require_role,
-                              writable_project)
+from backend.api.deps import (ADMIN, MANAGE, current_user,
+                              get_project_or_404, get_source_or_404,
+                              require_role, writable_project)
+from backend.core import config
 from backend.data import notes, projects
 from backend.data import quiz as quiz_store
 from backend.data import store
@@ -20,7 +21,21 @@ async def whoami(user: str = Depends(current_user)):
     personal = await projects.personal_project(user)
     return {"ok": True, "user": await users.get(user),
             "users": await users.list_users(),
-            "personal_project": personal}
+            "personal_project": personal,
+            "permissions": permissions()}
+
+def permissions() -> dict:
+    """The role vocabulary from kndb.yaml, so the pages draw the same rules the
+    routes enforce instead of keeping a second copy of them."""
+    return {
+        "roles": list(config.ROLES),
+        "default_role": config.DEFAULT_ROLE,
+        "owner_role": config.OWNER_ROLE,
+        "grants": {"write": list(config.WRITE_ROLES),
+                   "edit_others": list(config.EDIT_OTHERS_ROLES),
+                   "manage": list(config.MANAGE_ROLES),
+                   "admin": list(config.ADMIN_ROLES)},
+    }
 
 @router.post("/api/users")
 async def create_user(body: Optional[dict] = None):
@@ -59,7 +74,7 @@ async def project_detail(pid: str, user: str = Depends(current_user)):
 async def update_project(pid: str, body: Optional[dict] = None,
                          user: str = Depends(current_user)):
     await get_project_or_404(pid)
-    await require_role(pid, user, "owner", "maintainer")
+    await require_role(pid, user, *MANAGE)
     body = body or {}
     caps = (body.get("capabilities") or {}) if isinstance(body.get("capabilities"), dict) else {}
     p = await projects.update_project(
@@ -75,7 +90,7 @@ async def update_project(pid: str, body: Optional[dict] = None,
 @router.delete("/api/projects/{pid}")
 async def delete_project(pid: str, user: str = Depends(current_user)):
     await get_project_or_404(pid)
-    await require_role(pid, user, "owner")
+    await require_role(pid, user, *ADMIN)
     try:
         await projects.delete_project(pid)
     except ValueError as e:
@@ -92,10 +107,10 @@ async def project_members(pid: str, user: str = Depends(current_user)):
 async def add_member(pid: str, body: Optional[dict] = None,
                      user: str = Depends(current_user)):
     await get_project_or_404(pid)
-    await require_role(pid, user, "owner", "maintainer")
+    await require_role(pid, user, *MANAGE)
     body = body or {}
     name = (body.get("name") or "").strip()
-    role = (body.get("role") or "contributor").strip()
+    role = (body.get("role") or projects.DEFAULT_ROLE).strip()
     if not name:
         raise HTTPException(400, "member name required")
     if role not in projects.ROLES:
@@ -115,9 +130,9 @@ async def add_member(pid: str, body: Optional[dict] = None,
 async def set_member_role(pid: str, name: str, body: Optional[dict] = None,
                           user: str = Depends(current_user)):
     await get_project_or_404(pid)
-    await require_role(pid, user, "owner", "maintainer")
+    await require_role(pid, user, *MANAGE)
     body = body or {}
-    role = (body.get("role") or "contributor").strip()
+    role = (body.get("role") or projects.DEFAULT_ROLE).strip()
     if role not in projects.ROLES:
         raise HTTPException(400, f"invalid role; choose from {sorted(projects.ROLES)}")
     try:
@@ -131,7 +146,7 @@ async def set_member_role(pid: str, name: str, body: Optional[dict] = None,
 @router.delete("/api/projects/{pid}/members/{name}")
 async def remove_member(pid: str, name: str, user: str = Depends(current_user)):
     await get_project_or_404(pid)
-    await require_role(pid, user, "owner", "maintainer")
+    await require_role(pid, user, *MANAGE)
     try:
         ok = await projects.remove_member(pid, name)
     except ValueError as e:
@@ -162,7 +177,7 @@ async def add_project_source(pid: str, body: Optional[dict] = None,
 async def remove_project_source(pid: str, sid: str,
                                 user: str = Depends(current_user)):
     await get_project_or_404(pid)
-    await require_role(pid, user, "owner", "maintainer")
+    await require_role(pid, user, *MANAGE)
     if not await projects.remove_source(pid, sid):
         raise HTTPException(404, "source not in project")
     return {"ok": True, "sources": await store.list_sources(pid=pid)}

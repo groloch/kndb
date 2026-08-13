@@ -7,7 +7,7 @@ from backend.api.deps import (current_user, get_note_or_404,
                               get_project_or_404, get_source_or_404,
                               require_role, writable_project)
 from backend.content import blame
-from backend.data import notes, projects, store
+from backend.data import anchors, notes, projects, store
 
 
 router = APIRouter()
@@ -88,12 +88,18 @@ async def _copy_page(nid: str, dst_pid: str, user: str) -> dict:
     page = await get_note_or_404(nid)
     origin_project = await get_project_or_404(page["project_id"])
     header = _provenance(origin_project["name"], page)
-    return await _land(
+    landed = await _land(
         dst_pid, page["source_id"], user=user, text=page["content"],
         rle=page["blame"], header=header,
         name=page["name"] or origin_project["name"],
         origin={"project_id": page["project_id"], "note_id": page["id"],
                 "at": page["updated_at"]})
+    # The text arrived; its links to the document should arrive with it. Both
+    # ends are quotes, so they resolve against the copy even when _land()
+    # appended it under a header and moved every offset in the page.
+    if page["source_id"]:
+        await anchors.copy_to_note(nid, landed["id"], dst_pid)
+    return landed
 
 @router.post("/api/transfer/note")
 async def transfer_note(body: Optional[dict] = None,

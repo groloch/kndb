@@ -2,7 +2,16 @@ import json
 
 from fastapi import HTTPException, Request
 
+from backend.core import config
 from backend.data import notes, projects, store, users
+
+
+# Role sets come from permissions.grants in kndb.yaml, so a deployment can
+# widen or narrow what each role may do without touching the routes.
+WRITE = config.WRITE_ROLES
+EDIT_OTHERS = config.EDIT_OTHERS_ROLES
+MANAGE = config.MANAGE_ROLES
+ADMIN = config.ADMIN_ROLES
 
 
 async def get_source_or_404(sid: str) -> dict:
@@ -39,7 +48,7 @@ async def require_role(pid: str, user: str, *allowed: str) -> str:
 
 async def writable_project(pid: str, user: str) -> dict:
     p = await get_project_or_404(pid)
-    await require_role(pid, user, "owner", "maintainer", "contributor")
+    await require_role(pid, user, *WRITE)
     return p
 
 def sse(events):

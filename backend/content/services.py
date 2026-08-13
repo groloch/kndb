@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -30,6 +31,10 @@ async def material_for(scope: str, row: dict, notes_text: str = ""):
 async def document_text(row: dict) -> str:
     stype, path = row["source_type"], row["source_path"]
 
+    def _sidecar():
+        with open(store.text_sidecar(path), encoding="utf-8") as f:
+            return f.read()
+
     def _md():
         with open(path, encoding="utf-8") as f:
             return f.read()
@@ -54,6 +59,10 @@ async def document_text(row: dict) -> str:
         except Exception as e:  # noqa: BLE001
             return f"[could not extract text from this PDF: {e}]"
 
+    if os.path.exists(store.text_sidecar(path)):
+        text = await asyncio.to_thread(_sidecar)
+        if text.strip():
+            return text
     if stype == "md":
         return await asyncio.to_thread(_md)
     if stype in ("html", "html+css"):
@@ -168,7 +177,7 @@ async def stream_quiz(pid: str, sid: str, scope: str = "both", num_questions: in
             "source_id": sid, "updated_at": _local_now(), "questions": questions,
         })
         stats = await quiz_store.read_stats(pid, sid) or quiz_store.new_stats(
-            row["title"], row["source_type"], row["tags"], row["category"], row["url"])
+            row["title"], row["source_type"], row["tags"], row["url"])
         stats.setdefault("questions", {})
         _init_question_stats(stats, questions)
         await quiz_store.save_stats(pid, sid, stats)

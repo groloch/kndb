@@ -71,12 +71,12 @@ function setBusy(btn, busy, label) {
   }
 }
 
-/* ---------- The library tree (shared with the project pages) ---------- */
+/* ---------- The library tree ---------- */
 
 const TREE = makeTree({
   host: $("#dir-list"),
-  readOnly: () => false,          // it is your own workspace
-  role: () => "owner",
+  readOnly: () => false,
+  role: () => KNDB.ownerRole,   // you own your own workspace
   showQuestions: () => true,
   removeTitle: "Delete source",
   empty: '<div class="empty">No sources yet.<br>Add one with <b>+ Import</b>.</div>',
@@ -133,15 +133,12 @@ async function openSource(id) {
   await loadResource(s);
   await loadNote(s);
   applyNoteMode();
-  $("#meta-category").value = s.category || "";
-  $("#res-footer").classList.remove("hidden");
 }
 
 async function openFolder(path) {
   S.current = null;
   S.noteId = null;
   setToolbar(null);
-  $("#res-footer").classList.add("hidden");
   $("#note-editor").classList.add("hidden");
   $("#note-preview").classList.remove("hidden");
   $("#note-preview").innerHTML =
@@ -155,7 +152,6 @@ async function openFolder(path) {
 async function openStandalone(nid) {
   S.current = null;
   setToolbar(null);
-  $("#res-footer").classList.add("hidden");
   const d = await api(`/api/notes/${nid}`);
   S.noteId = d.note.id;
   S.noteVersion = d.note.version;
@@ -168,14 +164,23 @@ async function openStandalone(nid) {
   S.noteMode = "edit";
   applyNoteMode();
   showCompiled(d.note.name, d.note.content);
+  await ANCHORS.load();   // a standalone note has no source: this clears them
+}
+
+/** Hide every viewer. Each of the three is exclusive, and the PDF one holds a
+ *  worker and a pile of canvases, so leaving it costs more than a class. */
+function clearViewers() {
+  PDFView.destroy();
+  $("#res-frame").classList.add("hidden");
+  $("#res-frame").src = "about:blank";
+  $("#res-md").classList.add("hidden");
+  $("#res-empty").classList.add("hidden");
 }
 
 function showCompiled(title, markdown) {
   $("#res-title").textContent = title || "Note";
   $("#res-meta").classList.add("hidden");
-  $("#res-frame").classList.add("hidden");
-  $("#res-frame").src = "about:blank";
-  $("#res-empty").classList.add("hidden");
+  clearViewers();
   const md = $("#res-md");
   md.innerHTML = renderMarkdown(markdown);
   md.classList.remove("hidden");
@@ -194,28 +199,24 @@ function resetNoSource() {
   $("#res-title").textContent = "Resource";
   $("#res-meta").textContent = "";
   $("#res-meta").classList.add("hidden");
-  $("#res-frame").classList.add("hidden");
-  $("#res-frame").src = "about:blank";
-  $("#res-md").classList.add("hidden");
+  clearViewers();
   $("#res-md").innerHTML = "";
   $("#res-empty").classList.remove("hidden");
-  $("#res-footer").classList.add("hidden");
   $("#note-editor").value = "";
   $("#note-preview").innerHTML = '<p class="muted">Select a source in the directory to read and edit its notes.</p>';
   $("#note-editor").classList.add("hidden");
   $("#note-preview").classList.remove("hidden");
   $("#note-save-state").textContent = "";
   setToolbar(null);
+  ANCHORS.clear();
 }
 
 async function loadResource(s) {
   $("#res-title").textContent = s.title;
   $("#res-meta").textContent = s.source_type;
   $("#res-meta").classList.remove("hidden");
-  const frame = $("#res-frame"), md = $("#res-md"), empty = $("#res-empty");
-  empty.classList.add("hidden");
-  frame.classList.add("hidden");
-  md.classList.add("hidden");
+  const md = $("#res-md"), empty = $("#res-empty");
+  clearViewers();
   const src = `/api/source/${s.id}/content`;
   if (s.source_type === "md") {
     try {
@@ -227,9 +228,11 @@ async function loadResource(s) {
       empty.textContent = "Could not load the markdown source: " + e.message;
       empty.classList.remove("hidden");
     }
+  } else if (isPdf(s)) {
+    await PDFView.open(src, $("#res-pdf"));
   } else {
-    frame.src = src;
-    frame.classList.remove("hidden");
+    $("#res-frame").src = src;
+    $("#res-frame").classList.remove("hidden");
   }
 }
 
@@ -244,6 +247,7 @@ async function loadNote(s) {
     $("#note-editor").value = S.noteContent;
     $("#note-preview").innerHTML = renderMarkdown(S.noteContent);
     $("#note-save-state").textContent = "";
+    await ANCHORS.load();
   } catch (e) {
     toast("Failed to load note: " + e.message, "err");
   }
@@ -278,6 +282,8 @@ async function saveNote() {
       showCompiled(d.note.name, d.note.content);   // the viewer *is* this note
     }
     $("#note-save-state").textContent = "saved";
+    // A sentence that is gone from the saved text takes its link with it.
+    await ANCHORS.pruneLost();
   } catch (e) {
     S.noteDirty = true;
     $("#note-save-state").textContent = "save error";
@@ -298,7 +304,66 @@ function applyNoteMode() {
   } else if (S.noteId) {
     $("#note-editor").focus();
   }
+  ANCHORS.draw();
 }
+
+
+/* ---------- Anchors: note sentences grounded in the document ---------- */
+
+/** What the viewer is showing, in the terms the anchoring module needs. */
+function docTarget() {
+  const s = S.current;
+  if (!s) return null;
+  if (isPdf(s)) return { kind: "pdf" };
+  if (s.source_type === "md") {
+    const root = $("#res-md");
+    return root.classList.contains("hidden")
+      ? null : { kind: "html", root, scroller: root };
+  }
+  const frame = $("#res-frame");
+  if (frame.classList.contains("hidden")) return null;
+  try {
+    const d = frame.contentDocument;
+    if (d && d.body) {
+      return { kind: "html", root: d.body,
+               scroller: d.scrollingElement || d.documentElement,
+               win: frame.contentWindow };
+    }
+  } catch (_) { /* cross-origin: not linkable */ }
+  return null;
+}
+
+const ANCHORS = makeAnchors({
+  editor: () => $("#note-editor"),
+  mirror: () => $("#note-mirror"),
+  layer: () => $("#anchor-layer"),
+  wrap: () => $(".note-wrap"),
+  preview: () => $("#note-preview"),
+  docPane: () => $("#panel-res"),
+  docTarget,
+  projectId: () => (KNDB.personal ? KNDB.personal.id : ""),
+  noteId: () => S.noteId || "",
+  // A standalone note has no document beside it, so nothing to link into.
+  sourceId: () => (S.current ? S.current.id : ""),
+  // The workspace has one member; without their colour every link would be
+  // drawn in the "someone else" grey.
+  colors: () => Object.fromEntries(
+    ((KNDB.personal && KNDB.personal.members) || []).map(m => [m.name, m.color])),
+  canLink: () => true,          // you own your workspace
+  inPreview: () => $("#note-editor").classList.contains("hidden"),
+  ensureEditMode: async () => {
+    if (!$("#note-editor").classList.contains("hidden")) return;
+    S.noteMode = "edit";
+    applyNoteMode();
+  },
+  // One note per source here, so every link on this document is on this page.
+  openNote: async nid => nid === S.noteId,
+  onChange: ({ lost }) => {
+    $("#note-anchor-state").textContent = lost
+      ? lost + (lost === 1 ? " link no longer resolves" : " links no longer resolve")
+      : "";
+  },
+});
 
 $("#btn-import").addEventListener("click", () => {
   $("#import-url").value = "";
@@ -331,21 +396,6 @@ $("#import-submit").addEventListener("click", async () => {
     toast("Import failed: " + e.message, "err", 9000);
   } finally {
     setBusy(btn, false, "Import");
-  }
-});
-
-$("#meta-save").addEventListener("click", async () => {
-  if (!S.current) return;
-  try {
-    const d = await api(`/api/source/${S.current.id}/meta`, {
-      method: "POST",
-      body: { category: $("#meta-category").value },
-    });
-    S.current.category = d.category;
-    TREE.render();                 // the unfolded row shows the category
-    toast("Metadata saved", "ok");
-  } catch (e) {
-    toast("Failed to save metadata: " + e.message, "err");
   }
 });
 

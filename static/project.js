@@ -3,8 +3,6 @@
 /* Project workspace. Shared helpers ($, api, toast, renderMarkdown, blame…)
  * come from common.js. */
 
-const ROLES = ["owner", "maintainer", "contributor", "spectator"];
-
 // project id comes from the URL /projects/<pid>
 const PID = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
 
@@ -12,7 +10,7 @@ const S = {
   project: null,
   caps: {},
   colors: {},
-  role: "contributor",
+  role: "",
   workspace: [],     // the user's own library, for the add-source modal
   rows: [],          // sources in this project
   folders: [],
@@ -86,13 +84,14 @@ async function loadProject() {
   }
   S.project = p;
   S.caps = p.capabilities || {};
-  S.role = (p.members || []).find(m => m.name === KNDB.user)?.role || "spectator";
+  // no membership means no role at all — every grant check below then fails
+  S.role = (p.members || []).find(m => m.name === KNDB.user)?.role || "";
   document.title = p.name + " — KNDB";
   $("#sub-name").textContent = p.name;
   $("#sub-name").title = p.description || "";
   $("#prj-badge").classList.toggle("hidden", !p.completed);
 
-  S.readOnly = S.role === "spectator" || p.completed;
+  S.readOnly = !KNDB.may(S.role, "write") || p.completed;
   $$("#panel-dir .head-actions .btn").forEach(b => { b.disabled = S.readOnly; });
 
   renderSettings();
@@ -131,9 +130,9 @@ function resetSelection() {
   $("#res-title").textContent = "Resource";
   $("#res-meta").classList.add("hidden");
   $("#btn-edit-tags").disabled = true;
-  const frame = $("#res-frame"), md = $("#res-md"), empty = $("#res-empty");
-  frame.classList.add("hidden"); frame.src = "about:blank";
-  md.classList.add("hidden"); md.innerHTML = "";
+  const empty = $("#res-empty");
+  clearViewers();
+  $("#res-md").innerHTML = "";
   empty.classList.remove("hidden");
   empty.textContent = "Select a source from the library to read it and take notes next to it.";
   $("#note-tabs").classList.add("hidden");
@@ -144,6 +143,7 @@ function resetSelection() {
   $("#blame-gutter").classList.add("hidden");
   $("#blame-legend").classList.add("hidden");
   $("#note-save-state").textContent = "";
+  ANCHORS.clear();
 }
 
 /** Every selection lands here, whether it came from a click in the tree, the
@@ -169,6 +169,7 @@ async function selectedSource(id) {
 
 async function selectedFolder(path) {
   S.pages = []; S.note = null;
+  ANCHORS.clear();
   $("#note-tabs").classList.add("hidden");
   $("#blame-gutter").classList.add("hidden");
   $("#blame-legend").classList.add("hidden");
@@ -207,12 +208,20 @@ $("#btn-edit-tags").addEventListener("click", () => {
   });
 });
 
+/** Hide every viewer. Each of the three is exclusive, and the PDF one holds a
+ *  worker and a pile of canvases, so leaving it costs more than a class. */
+function clearViewers() {
+  PDFView.destroy();
+  $("#res-frame").classList.add("hidden");
+  $("#res-frame").src = "about:blank";
+  $("#res-md").classList.add("hidden");
+  $("#res-empty").classList.add("hidden");
+}
+
 function showCompiled(title, markdown) {
   $("#res-title").textContent = title || "Note";
   $("#res-meta").classList.add("hidden");
-  $("#res-frame").classList.add("hidden");
-  $("#res-frame").src = "about:blank";
-  $("#res-empty").classList.add("hidden");
+  clearViewers();
   const md = $("#res-md");
   md.innerHTML = renderMarkdown(markdown);
   md.classList.remove("hidden");
@@ -222,9 +231,8 @@ async function loadResource(s) {
   $("#res-title").textContent = s.title;
   $("#res-meta").textContent = s.source_type;
   $("#res-meta").classList.remove("hidden");
-  const frame = $("#res-frame"), md = $("#res-md"), empty = $("#res-empty");
-  empty.classList.add("hidden");
-  frame.classList.add("hidden"); md.classList.add("hidden");
+  const md = $("#res-md"), empty = $("#res-empty");
+  clearViewers();
   const src = "/api/source/" + s.id + "/content";
   if (s.source_type === "md") {
     try {
@@ -236,9 +244,11 @@ async function loadResource(s) {
       empty.textContent = "Could not load the markdown source: " + e.message;
       empty.classList.remove("hidden");
     }
+  } else if (isPdf(s)) {
+    await PDFView.open(src, $("#res-pdf"));
   } else {
-    frame.src = src;
-    frame.classList.remove("hidden");
+    $("#res-frame").src = src;
+    $("#res-frame").classList.remove("hidden");
   }
 }
 
@@ -310,7 +320,7 @@ $("#note-tabs").addEventListener("click", async e => {
 
 function canRename(page) {
   return !S.readOnly && (page.created_by === KNDB.user
-    || S.role === "maintainer" || S.role === "owner");
+    || KNDB.may(S.role, "edit_others"));
 }
 
 /** Rename a page from its tab. A modal for a two-word title was more ceremony
@@ -410,8 +420,11 @@ async function loadNote(nid) {
     S.noteDirty = false;
     applyNoteMode();
     renderBlameLegend(d.show_blame);
+    await ANCHORS.load();
+    return true;
   } catch (e) {
     toast("Failed to load the note: " + e.message, "err");
+    return false;
   }
 }
 
@@ -464,6 +477,8 @@ async function saveNote() {
       renderNoteTabs();
     }
     $("#note-save-state").textContent = "saved";
+    // A sentence that is gone from the saved text takes its link with it.
+    await ANCHORS.pruneLost();
   } catch (e) {
     S.noteDirty = true;
     $("#note-save-state").textContent = e.status === 403 ? "not allowed" : "save error";
@@ -491,6 +506,7 @@ function applyNoteMode() {
     : "Ctrl+D toggles preview";
   if (!edit) $("#note-preview").innerHTML = renderMarkdown($("#note-editor").value);
   scheduleGutter();
+  ANCHORS.draw();     // links are drawn over the textarea, so preview hides them
 }
 
 $("#note-editor").addEventListener("input", onNoteTyped);
@@ -582,6 +598,73 @@ function syncGutterScroll() {
   if (!track) return;
   track.style.transform = "translateY(" + -$("#note-editor").scrollTop + "px)";
 }
+
+
+/* ---------- Anchors: note sentences grounded in the document ---------- */
+
+/** The source whose document is in the viewer right now. */
+function currentSource() {
+  const sid = S.note ? S.note.source_id : (S.sel && S.sel.kind === "source" ? S.sel.id : "");
+  return sid ? S.rows.find(r => r.id === sid) || null : null;
+}
+
+/** What the viewer is showing, in the terms the anchoring module needs: our
+ *  own PDF renderer, or a piece of HTML it can measure and draw over. */
+function docTarget() {
+  const s = currentSource();
+  if (!s) return null;
+  if (isPdf(s)) return { kind: "pdf" };
+  if (s.source_type === "md") {
+    const root = $("#res-md");
+    return root.classList.contains("hidden")
+      ? null : { kind: "html", root, scroller: root };
+  }
+  // An HTML source is served from our own origin, so its frame is reachable.
+  const frame = $("#res-frame");
+  if (frame.classList.contains("hidden")) return null;
+  try {
+    const d = frame.contentDocument;
+    if (d && d.body) {
+      return { kind: "html", root: d.body,
+               scroller: d.scrollingElement || d.documentElement,
+               win: frame.contentWindow };
+    }
+  } catch (_) { /* cross-origin: not linkable, and nothing we can do */ }
+  return null;
+}
+
+const ANCHORS = makeAnchors({
+  editor: () => $("#note-editor"),
+  mirror: () => $("#note-mirror"),
+  layer: () => $("#anchor-layer"),
+  wrap: () => $(".note-wrap"),
+  preview: () => $("#note-preview"),
+  docPane: () => $("#panel-res"),
+  docTarget,
+  projectId: () => PID,
+  noteId: () => (S.note ? S.note.id : ""),
+  sourceId: () => (S.note ? S.note.source_id : ""),
+  colors: () => S.colors,
+  canLink: () => !S.readOnly && S.canEdit !== false,
+  inPreview: () => $("#note-editor").classList.contains("hidden"),
+  ensureEditMode: async () => {
+    if (!$("#note-editor").classList.contains("hidden")) return;
+    S.noteMode = "edit";
+    applyNoteMode();
+  },
+  openNote: async nid => {
+    await flushNote();
+    const ok = await loadNote(nid);
+    renderNoteTabs();
+    return ok;
+  },
+  onChange: ({ lost }) => {
+    const el = $("#note-anchor-state");
+    el.textContent = lost
+      ? lost + (lost === 1 ? " link no longer resolves" : " links no longer resolve")
+      : "";
+  },
+});
 
 
 /* ---------- Import & sources ---------- */
@@ -800,10 +883,19 @@ function renderSettings() {
   renderMembers();
 }
 
+function roleOption(role, selected) {
+  return '<option value="' + escapeHtml(role) + '"'
+    + (role === selected ? " selected" : "") + ">" + escapeHtml(role) + "</option>";
+}
+
 function renderMembers() {
   const el = $("#prj-members");
   const p = S.project;
   if (!p) return;
+  const roleSel = $("#member-role");
+  if (!roleSel.options.length) {          // filled once; keeps the user's pick
+    roleSel.innerHTML = KNDB.roles.map(r => roleOption(r, KNDB.defaultRole)).join("");
+  }
   el.innerHTML = "";
   for (const m of p.members || []) {
     const row = document.createElement("div");
@@ -814,8 +906,7 @@ function renderMembers() {
       '<span class="mini-name">' + escapeHtml(m.name)
       + (isYou ? ' <span class="muted">(you)</span>' : "") + "</span>" +
       '<select class="input small role-sel"' + (isYou ? " disabled" : "") + ">" +
-        ROLES.map(r => '<option value="' + r + '"' + (r === m.role ? " selected" : "")
-          + ">" + r + "</option>").join("") +
+        KNDB.roles.map(r => roleOption(r, m.role)).join("") +
       "</select>" +
       (isYou ? "" : '<button class="btn small del" title="Remove member">×</button>');
     const sel = row.querySelector(".role-sel");

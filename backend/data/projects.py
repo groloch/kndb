@@ -3,28 +3,25 @@ import time
 
 from sqlalchemy import delete, func, select
 
-from ..core import db
+from ..core import config, db
 from ..core.db import (Project, ProjectFolder, ProjectMember, ProjectSource,
                        SourceQuiz)
 
 
-DEFAULT_USER = "me"          # dev-mode fallback until real auth lands
-CURRENT_USER = DEFAULT_USER  # legacy alias
-ROLES = {"owner", "maintainer", "contributor", "spectator"}
-_DEFAULT_ROLE = "contributor"
+# All of these are knobs in kndb.yaml; re-exported here because this module is
+# where the rest of the backend reaches for them.
+DEFAULT_USER = config.DEFAULT_USER   # dev-mode fallback until real auth lands
+ROLES = set(config.ROLES)
+DEFAULT_ROLE = config.DEFAULT_ROLE
+OWNER_ROLE = config.OWNER_ROLE
 
-PALETTE = [
-    "#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899",
-    "#14b8a6", "#f97316", "#6366f1", "#84cc16", "#06b6d4", "#d946ef",
-]
-EXTERNAL_COLOR = "#94a3b8"
+PALETTE = list(config.MEMBER_COLORS)
+EXTERNAL_COLOR = config.EXTERNAL_COLOR
 
-PERSONAL_CAPS = {"allow_quiz": True, "multi_notes": False,
-                 "show_blame": True, "auto_import": True}
-TEAM_CAPS = {"allow_quiz": False, "multi_notes": True,
-             "show_blame": True, "auto_import": False}
+PERSONAL_CAPS = config.PERSONAL_CAPS
+TEAM_CAPS = config.TEAM_CAPS
 
-_CAP_KEYS = tuple(TEAM_CAPS)
+_CAP_KEYS = config.CAP_KEYS
 
 
 def make_id() -> str:
@@ -137,7 +134,7 @@ async def create_project(name: str, description: str = "", owner: str = "",
                 owner_user=owner if kind == "personal" else "", **settings)
     async with db.session() as s:
         s.add(p)
-        s.add(ProjectMember(project_id=pid, name=owner, role="owner",
+        s.add(ProjectMember(project_id=pid, name=owner, role=OWNER_ROLE,
                             color=PALETTE[0]))
         await s.commit()
     return await get_project(pid)
@@ -213,8 +210,8 @@ def _pick_color(taken: set) -> str:
             return c
     return PALETTE[len(taken) % len(PALETTE)]
 
-async def add_member(pid: str, name: str, role: str = _DEFAULT_ROLE) -> dict | None:
-    role = role if role in ROLES else _DEFAULT_ROLE
+async def add_member(pid: str, name: str, role: str = DEFAULT_ROLE) -> dict | None:
+    role = role if role in ROLES else DEFAULT_ROLE
     name = name.strip()[:120]
     if not name:
         raise ValueError("member name required")
@@ -241,19 +238,19 @@ async def remove_member(pid: str, name: str) -> bool:
         )).scalar_one_or_none()
         if m is None:
             return False
-        if m.role == "owner":
+        if m.role == OWNER_ROLE:
             owners = (await s.execute(
                 select(func.count()).select_from(ProjectMember)
                 .where(ProjectMember.project_id == pid,
-                       ProjectMember.role == "owner"))).scalar_one()
+                       ProjectMember.role == OWNER_ROLE))).scalar_one()
             if owners <= 1:
-                raise ValueError("cannot remove the last owner of a project")
+                raise ValueError(f"cannot remove the last {OWNER_ROLE} of a project")
         await s.delete(m)
         await s.commit()
     return True
 
 async def set_member_role(pid: str, name: str, role: str) -> bool:
-    role = role if role in ROLES else _DEFAULT_ROLE
+    role = role if role in ROLES else DEFAULT_ROLE
     async with db.session() as s:
         m = (await s.execute(
             select(ProjectMember).where(ProjectMember.project_id == pid,
@@ -261,13 +258,13 @@ async def set_member_role(pid: str, name: str, role: str) -> bool:
         )).scalar_one_or_none()
         if m is None:
             return False
-        if m.role == "owner" and role != "owner":
+        if m.role == OWNER_ROLE and role != OWNER_ROLE:
             owners = (await s.execute(
                 select(func.count()).select_from(ProjectMember)
                 .where(ProjectMember.project_id == pid,
-                       ProjectMember.role == "owner"))).scalar_one()
+                       ProjectMember.role == OWNER_ROLE))).scalar_one()
             if owners <= 1:
-                raise ValueError("cannot demote the last owner of a project")
+                raise ValueError(f"cannot demote the last {OWNER_ROLE} of a project")
         m.role = role
         await s.commit()
     return True
@@ -306,8 +303,9 @@ async def remove_source(pid: str, source_id: str) -> bool:
         await s.execute(delete(SourceQuiz).where(SourceQuiz.project_id == pid,
                                                  SourceQuiz.source_id == source_id))
         await s.commit()
-    from . import notes
+    from . import anchors, notes
     await notes.delete_for_source(pid, source_id)
+    await anchors.delete_for_project_source(pid, source_id)
     return True
 
 async def remove_source_everywhere(source_id: str) -> None:
@@ -316,8 +314,9 @@ async def remove_source_everywhere(source_id: str) -> None:
         await s.execute(delete(ProjectSource).where(ProjectSource.source_id == source_id))
         await s.execute(delete(SourceQuiz).where(SourceQuiz.source_id == source_id))
         await s.commit()
-    from . import notes
+    from . import anchors, notes
     await notes.delete_for_source(None, source_id)
+    await anchors.delete_for_project_source(None, source_id)
 
 async def set_source_folder(pid: str, source_id: str, folder: str) -> bool:
     folder = norm_folder(folder)

@@ -9,10 +9,18 @@
 
 const KNDB = (window.KNDB = {
   USER_KEY: "kndb.user",
-  user: localStorage.getItem("kndb.user") || "me",
+  // empty until /api/me answers: the server resolves an unnamed caller to
+  // permissions.default_user, so the default lives in kndb.yaml, not here
+  user: localStorage.getItem("kndb.user") || "",
   me: null,          // filled by /api/me
   users: [],
+  roles: [],         // role vocabulary, from permissions: in kndb.yaml
+  grants: {},        // action -> the roles allowed to do it
 });
+
+/** Does `role` cover `action`? The server enforces the same table; this only
+ *  decides what to draw, since a button that always 403s is worse than none. */
+KNDB.may = (role, action) => (KNDB.grants[action] || []).includes(role);
 
 (function patchFetch() {
   const original = window.fetch;
@@ -190,11 +198,15 @@ function confirmModal(opts = {}) {
 
 function renderMarkdown(md) {
   if (!md) return "";
-  let html;
-  if (window.marked) html = window.marked.parse(md, { breaks: true, gfm: true });
-  else html = miniMarkdown(md);
-  if (window.DOMPurify) return DOMPurify.sanitize(html);
-  return html.replace(/<script[\s\S]*?<\/script>/gi, "");
+  // Both libraries are vendored (dev_tools/fetch_vendor.py). Without the
+  // sanitizer, marked's HTML cannot be trusted at all, so fall all the way back
+  // to miniMarkdown — it escapes the source first and only ever emits its own
+  // small set of tags. Degrade the rendering, never the safety.
+  if (!window.DOMPurify) return miniMarkdown(md);
+  const html = window.marked
+    ? window.marked.parse(md, { breaks: true, gfm: true })
+    : miniMarkdown(md);
+  return DOMPurify.sanitize(html);
 }
 
 function miniMarkdown(md) {
@@ -233,6 +245,106 @@ function miniMarkdown(md) {
 function typePill(stype) {
   return '<span class="pill type-' + String(stype).replace("+", "\\+") + '">'
     + escapeHtml(stype) + "</span>";
+}
+
+/** PDFs go to our own renderer rather than the browser's, because a passage
+ *  has to be selectable for a note to point at it (see plan-anchors.md). */
+function isPdf(s) { return !!s && s.source_type === "pdf"; }
+
+
+/* ---------- Quote locators ---------- */
+
+/* Both ends of an anchor are quotes, not positions: a note sentence keeps its
+ * link through edits above it, and a passage keeps its link through a re-fetch.
+ * The stored offset is only a hint that makes the common case a single string
+ * comparison. Pure functions, no DOM — the one piece of anchoring that could be
+ * unit-tested if a JS runner is ever added. */
+
+const LOC_CONTEXT = 40;
+
+function quoteLocator(text, start, end) {
+  return {
+    exact: text.slice(start, end),
+    prefix: text.slice(Math.max(0, start - LOC_CONTEXT), start),
+    suffix: text.slice(end, end + LOC_CONTEXT),
+    char_start: start,
+  };
+}
+
+/** Find `loc` in `text`, or null if the quoted text is gone. */
+function resolveLocator(text, loc) {
+  const exact = (loc && loc.exact) || "";
+  if (!exact || !text) return null;
+
+  // The hint, verified. Almost always the answer, and costs one comparison.
+  const hint = Number.isFinite(loc.char_start) ? loc.char_start : -1;
+  if (hint >= 0 && text.substr(hint, exact.length) === exact) {
+    return { start: hint, end: hint + exact.length };
+  }
+
+  // Otherwise the quote moved: take the occurrence whose surroundings look
+  // most like the ones we recorded, and break ties by staying near the hint.
+  let best = null, bestScore = -1;
+  for (let i = text.indexOf(exact); i !== -1; i = text.indexOf(exact, i + 1)) {
+    const score = _tailMatch(text.slice(0, i), loc.prefix || "")
+      + _headMatch(text.slice(i + exact.length), loc.suffix || "");
+    const nearer = best && hint >= 0
+      && Math.abs(i - hint) < Math.abs(best.start - hint);
+    if (score > bestScore || (score === bestScore && nearer)) {
+      best = { start: i, end: i + exact.length };
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/** Collapse a Range's client rectangles to one per line.
+ *
+ *  A selection crossing several spans reports a rectangle per span, which
+ *  draws as a row of boxes with gaps at every word the markup happens to
+ *  split, and — for a PDF, where the rectangles are stored — can push a
+ *  locator past the size the server accepts. One box per line is both what the
+ *  reader expects to see and an order of magnitude less to store. */
+function mergeRowRects(rects) {
+  const rows = [];
+  for (const r of rects) {
+    if (r.width < 0.5 || r.height < 0.5) continue;
+    const tol = Math.max(2, r.height * 0.6);
+    // Compared against the line the row *started* on, never against its grown
+    // bounds: otherwise each merge widens the row enough to swallow the next
+    // line, and a whole paragraph collapses into one box.
+    const row = rows.find(x =>
+      Math.abs(x.keyTop - r.top) <= tol && Math.abs(x.keyBottom - r.bottom) <= tol
+      // …and only across a gap a line of text could plausibly contain, so two
+      // columns of a paper are never bridged over the gutter between them.
+      && r.left - x.right <= Math.max(20, r.height * 3)
+      && x.left - r.right <= Math.max(20, r.height * 3));
+    if (row) {
+      row.left = Math.min(row.left, r.left);
+      row.right = Math.max(row.right, r.right);
+      row.top = Math.min(row.top, r.top);
+      row.bottom = Math.max(row.bottom, r.bottom);
+    } else {
+      rows.push({ left: r.left, right: r.right, top: r.top, bottom: r.bottom,
+                  keyTop: r.top, keyBottom: r.bottom });
+    }
+  }
+  return rows.map(r => ({ left: r.left, top: r.top,
+                          width: r.right - r.left, height: r.bottom - r.top }));
+}
+
+/** How many characters `a` and `b` share at their ends. */
+function _tailMatch(a, b) {
+  let n = 0;
+  while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++;
+  return n;
+}
+
+/** How many characters `a` and `b` share at their starts. */
+function _headMatch(a, b) {
+  let n = 0;
+  while (n < a.length && n < b.length && a[n] === b[n]) n++;
+  return n;
 }
 
 /* ---------- Tags ---------- */
@@ -384,7 +496,7 @@ function blameColor(colors, author) {
  *  decides whether to draw the button, since one that always 403s is worse
  *  than none. `page.authors` is every author still holding a line. */
 function noteDeletable(page, role) {
-  if (!page || (role !== "owner" && role !== "maintainer")) return false;
+  if (!page || !KNDB.may(role, "edit_others")) return false;
   return (page.authors || []).every(a => !a || a === KNDB.user);
 }
 
@@ -398,8 +510,13 @@ async function initIdentity() {
     return null;
   }
   KNDB.me = me.user;
+  KNDB.user = KNDB.user || (me.user && me.user.name) || "";
   KNDB.users = me.users || [];
   KNDB.personal = me.personal_project;
+  KNDB.roles = (me.permissions && me.permissions.roles) || [];
+  KNDB.grants = (me.permissions && me.permissions.grants) || {};
+  KNDB.defaultRole = (me.permissions && me.permissions.default_role) || "";
+  KNDB.ownerRole = (me.permissions && me.permissions.owner_role) || "";
   renderUserSwitcher();
   return me;
 }

@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from backend.api.deps import (current_user, get_note_or_404,
+from backend.api.deps import (WRITE, current_user, get_note_or_404,
                               get_source_or_404, require_role, sse,
                               sse_headers)
 from backend.content import services
@@ -110,8 +110,7 @@ async def summarize(sid: str, body: Optional[dict] = None,
     if not nid:
         raise HTTPException(400, "missing note_id")
     page = await get_note_or_404(nid)
-    await require_role(page["project_id"], user,
-                       "owner", "maintainer", "contributor")
+    await require_role(page["project_id"], user, *WRITE)
     if page["source_id"] != sid:
         raise HTTPException(400, "that note does not belong to this source")
 

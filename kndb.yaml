@@ -1,8 +1,12 @@
-# KNDB configuration — loaded by backend/config.py at startup.
+# KNDB configuration — loaded by backend/core/config.py at startup.
 #
-# Anything omitted falls back to the built-in defaults (see backend/config.py).
+# Anything omitted falls back to the built-in defaults (see the _DEFAULTS dict
+# in backend/core/config.py). Mappings merge key by key, so you can override a
+# single capability; lists replace the default wholesale.
 # The file location can be overridden with the KNDB_CONFIG environment variable.
 # NOTE: other KNDB_* environment variables are no longer read for these values.
+#
+# Everything below is read once, at import — restart the server after editing.
 #
 # If you put secrets here (e.g. a real API key), consider adding this file
 # to .gitignore so it never reaches version control.
@@ -18,6 +22,50 @@ data:
 llm:
   base_url: http://127.0.0.1:1234/v1   # OpenAI-compatible server
   api_key: ""                          # leave empty for local servers
-  model: liquid/lfm2.5-1.2b          # model name sent in requests
+  model: liquid/lfm2.5-1.2b            # model name sent in requests
 
   retries: 3                           # transient-error retries (429/5xx/connection)
+
+permissions:
+  default_user: me        # who an unidentified request acts as, until real auth lands
+  roles: [owner, maintainer, contributor, spectator]
+  default_role: contributor              # role a new member gets
+  owner_role: owner       # given to whoever creates a project; it can never run out
+
+  # Which roles may do what. A role left out of every grant can only read.
+  # Names not listed in `roles` above are refused at startup.
+  grants:
+    write:       [owner, maintainer, contributor]  # import sources, write your own notes
+    edit_others: [owner, maintainer]               # rewrite or delete someone else's lines
+    manage:      [owner, maintainer]               # members, settings, project contents
+    admin:       [owner]                           # delete the project
+
+projects:
+  # What a new project starts with. Each switch is stored per project and stays
+  # editable from the project settings panel afterwards.
+  personal_capabilities:  # the workspace every user gets
+    allow_quiz: true      # quizzes can be generated from a source
+    multi_notes: false    # one note page per source, rather than one per author
+    show_blame: true      # colour note lines by who wrote them
+    auto_import: true     # sources filed into a project are mirrored here
+  team_capabilities:      # shared projects
+    allow_quiz: false
+    multi_notes: true
+    show_blame: true
+    auto_import: false
+
+  member_colors: ["#3b82f6", "#ef4444", "#10b981", "#f59e0b",
+                  "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
+                  "#6366f1", "#84cc16", "#06b6d4", "#d946ef"]
+  external_color: "#94a3b8"   # authors who are no longer members
+
+limits:
+  upload_mb: 300              # largest .pdf / .md upload accepted
+  image_mb: 3                 # largest image inlined when fetching a web page
+  image_downloads: 6          # concurrent image downloads per fetch
+  min_html_chars: 500         # shorter HTML than this is an error page, not a paper
+  min_page_chars: 200         # a fetched page with less text is rebuilt by the LLM
+  web_markdown_chars: 12000       # how much of such a page is sent to it
+  web_markdown_max_tokens: 2500   # and how long its answer may be
+  anchor_locator_chars: 4000      # note-side locator blob
+  anchor_doc_locator_chars: 16000 # document-side blob, which also holds highlight rects

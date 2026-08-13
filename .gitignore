@@ -5,5 +5,8 @@ __pycache__/
 sources/
 *.db
 
+# third-party JS — build artifacts, installed by dev_tools/fetch_vendor.py
+static/vendor/
+
 .DS_Store
 Thumbs.db

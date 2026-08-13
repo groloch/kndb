@@ -9,12 +9,13 @@ from fastapi.responses import FileResponse
 from backend.api.deps import current_user, get_source_or_404, writable_project
 from backend.api.transfer_routes import mirror_to_workspace
 from backend.content import fetchers
+from backend.core import config
 from backend.data import notes, projects, store
 
 
 router = APIRouter()
 
-MAX_UPLOAD = 300 * 1024 * 1024
+MAX_UPLOAD = config.UPLOAD_MAX_BYTES   # limits.upload_mb in kndb.yaml
 
 
 @router.get("/api/sources")
@@ -88,6 +89,9 @@ async def import_source(request: Request, url: str = Form(""),
             await asyncio.to_thread(_write_text, spath, content)
         else:
             await asyncio.to_thread(_write_bytes, spath, content)
+        if info.get("text"):
+            await asyncio.to_thread(_write_text, store.text_sidecar(spath),
+                                    info["text"])
         await _file_into(pid, sid, user, folder, seed=info.get("seed", ""))
     except HTTPException:
         raise
@@ -126,12 +130,12 @@ async def source_meta(sid: str, body: Optional[dict] = None):
     row = await get_source_or_404(sid)
     body = body or {}
     fields = {k: str(body[k] or "").strip()
-              for k in ("title", "tags", "category") if k in body}
+              for k in ("title", "tags") if k in body}
     if fields.get("title") == "":
         del fields["title"]          # a source always keeps a title
     await store.update_meta(sid, **fields)
     return {"ok": True, "id": sid, **{k: fields.get(k, row[k])
-                                      for k in ("title", "tags", "category")}}
+                                      for k in ("title", "tags")}}
 
 @router.delete("/api/source/{sid}")
 async def source_delete(sid: str):
@@ -162,7 +166,8 @@ async def put_note(sid: str, body: Optional[dict] = None,
     pid = await projects.personal_project_id(user)
     page = await notes.ensure_single(pid, sid, author=user)
     try:
-        saved = await notes.save(page["id"], content, author=user, role="owner",
+        saved = await notes.save(page["id"], content, author=user,
+                                 role=projects.OWNER_ROLE,
                                  base_version=body.get("base_version"))
     except notes.NoteConflict as e:
         raise HTTPException(409, str(e)) from e
