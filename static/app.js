@@ -14,6 +14,7 @@ const S = {
   noteMode: "preview",
   noteDirty: false,
   saveTimer: null,
+  compileTimer: null,  // standalone notes: viewer redraw, independent of saving
   streaming: false,
   quiz: null,          // quiz hub: the loaded quiz
   quizStats: null,     // quiz hub: its spaced-repetition stats
@@ -191,6 +192,24 @@ function showCompiled(title, markdown) {
   md.classList.remove("hidden");
 }
 
+/** Recompile the viewer from the textarea, keeping the reader where it was:
+ *  a standalone note is redrawn on every pause in the typing. */
+function recompileNote() {
+  const md = $("#res-md");
+  const top = md.scrollTop;
+  md.innerHTML = renderMarkdown($("#note-editor").value);
+  md.scrollTop = top;
+}
+
+/* The viewer *is* the note when there is no document, so it follows the
+ * keystrokes instead of waiting for the save round-trip. Markdown plus
+ * sanitising is not free on a long note, hence the short idle delay. */
+function scheduleCompile() {
+  if (!S.sel || S.sel.kind !== "note") return;
+  clearTimeout(S.compileTimer);
+  S.compileTimer = setTimeout(recompileNote, 150);
+}
+
 function setToolbar(s) {
   const on = !!s;
   ["btn-edit-tags", "btn-quiz", "btn-summarize"]
@@ -269,6 +288,7 @@ function onNoteTyped() {
   $("#note-save-state").textContent = "unsaved…";
   clearTimeout(S.saveTimer);
   S.saveTimer = setTimeout(saveNote, 1200);
+  scheduleCompile();
 }
 
 async function saveNote() {
@@ -289,7 +309,8 @@ async function saveNote() {
         body: { content, base_version: S.noteVersion },
       });
       S.noteVersion = d.note.version;
-      showCompiled(d.note.name, d.note.content);   // the viewer *is* this note
+      // The viewer already follows the editor as it is typed; redrawing it from
+      // the response would only throw the reader back to the top of the note.
     }
     $("#note-save-state").textContent = "saved";
     // A sentence that is gone from the saved text takes its link with it.
@@ -746,6 +767,9 @@ $("#note-editor").addEventListener("blur", () => { if (S.noteDirty) saveNote(); 
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") hideCtx();
   if (e.ctrlKey && e.key.toLowerCase() === "d") {
+    // Still swallowed so the browser keeps its bookmark dialog out of the way,
+    // but it toggles nothing on a standalone note: that one is compiled into
+    // the viewer as it is typed, so there is no second rendering to switch to.
     e.preventDefault();
     if (!S.current || S.streaming) return;
     S.noteMode = S.noteMode === "edit" ? "preview" : "edit";
