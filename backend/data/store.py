@@ -109,12 +109,18 @@ async def get_source(sid: str) -> dict | None:
 
 async def find_by_url(url: str) -> dict | None:
     """The source imported from this URL, None when blank or never fetched.
-    The dedup probe before importing again
+    The dedup probe before importing again.
+    ix_sources_url is not unique, so duplicates are possible and the earliest
+    import wins rather than raising
     """
     if not url:
         return None
     async with db.session() as s:
-        src = (await s.execute(select(Source).where(Source.url == url))).scalar_one_or_none()
+        rows = await s.execute(
+            select(Source).where(Source.url == url)
+            .order_by(Source.fetched_at, Source.id)
+        )
+        src = rows.scalars().first()
         return _row_to_dict(src) if src else None
 
 async def list_sources(q: str = "", pid: str = "") -> list:

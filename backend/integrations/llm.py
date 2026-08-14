@@ -155,6 +155,7 @@ async def chat(system: str, user: str, max_tokens: int | None = None,
     Nothing bounds the wait for tokens, so a slow generation blocks instead of
     failing
     """
+    global _last_error
     payload = {
         "model": _resolved_model,
         "messages": _messages(system, user),
@@ -196,6 +197,7 @@ async def stream_chat(system: str, user: str, max_tokens: int | None = None,
     answer from the top.
     Unparseable SSE chunks are skipped rather than raised
     """
+    global _last_error
     payload = {
         "model": _resolved_model,
         "messages": _messages(system, user),
