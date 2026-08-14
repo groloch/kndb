@@ -10,25 +10,19 @@
 </head>
 <body>
 
-<header class="topbar">
-  <div class="brand">KNDB<span class="brand-sub">knowledge database</span></div>
-  <nav class="top-nav">
-    <a href="/" class="tab">Sources</a>
-    <a href="/projects" class="tab active">Projects</a>
-  </nav>
-  <div class="top-actions">
-    <span id="user-switch" class="user-switch"></span>
-    <button id="btn-new" class="btn primary">+ New project</button>
-  </div>
-</header>
+{% set active_tab = "projects" %}
+{% include "templates/kndb_header.html" %}
 
 <main class="main page">
   <div class="page-head">
     <h1>Projects</h1>
     <p class="muted">Reading groups, papers in progress and shared workspaces.
       Each project opens its own workspace with a library, notes and a LaTeX editor.</p>
-    <input id="prj-search" class="search wide" type="search" spellcheck="false"
-           placeholder="Filter projects by name or description…">
+    <div class="page-tools">
+      <input id="prj-search" class="search wide" type="search" spellcheck="false"
+             placeholder="Filter projects by name or description…">
+      <button id="btn-new" class="btn primary">+ New project</button>
+    </div>
   </div>
 
   <div id="prj-list" class="prj-list grid"></div>

@@ -1,0 +1,27 @@
+<section id="panel-res" class="panel">
+    <div class="panel-head">
+        <span id="res-title" class="panel-title">Resource</span>
+        <span id="res-meta" class="pill hidden"></span>
+        <span class="head-actions">
+            <button id="btn-edit-tags" class="btn small" disabled
+                    title="Add or remove tags (@tag search)">Tags</button>
+            {% if user_workspace %}
+            <button id="btn-quiz" class="btn small" disabled
+                    title="Quiz for this source: stats, generation, play, questions">Quiz</button>
+            <button id="btn-close-res" class="icon-btn" disabled
+                    title="Close — clears the viewer and the notes beside it">
+                <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+                    <line x1="4.5" y1="4.5" x2="11.5" y2="11.5" stroke="currentColor"></line>
+                    <line x1="11.5" y1="4.5" x2="4.5" y2="11.5" stroke="currentColor"></line>
+                </svg>
+            </button>
+            {% endif %}
+        </span>
+    </div>
+    <div id="res-body" class="res-body">
+        <div id="res-empty" class="empty">No source selected.<br>Import a paper, a website or a file with <b>+ Import</b>.</div>
+        <iframe id="res-frame" class="res-frame hidden" sandbox="allow-same-origin allow-scripts"></iframe>
+        <div id="res-pdf" class="pdfview hidden"></div>
+        <div id="res-md" class="res-md prose hidden"></div>
+    </div>
+</section>

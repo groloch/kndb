@@ -96,4 +96,5 @@ if __name__ == "__main__":
         host=config.SERVER_HOST,
         port=config.SERVER_PORT,
         reload=config.DEBUG,
+        reload_dirs=[os.path.join(BASE_DIR, "static"), os.path.join(BASE_DIR, "backend")],
     )

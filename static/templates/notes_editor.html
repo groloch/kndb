@@ -1,0 +1,29 @@
+<section id="panel-note" class="panel">
+    {% if not user_workspace %}
+    <div id="note-tabs" class="note-tabs hidden"></div>
+    {% endif %}
+    <div id="blame-legend" class="blame-legend hidden"></div>
+    <div class="note-wrap">
+        {% if not user_workspace %}
+        <div id="blame-gutter" class="blame-gutter hidden"></div>
+        {% endif %}
+        <textarea id="note-editor" class="note-editor hidden" spellcheck="false"
+                  placeholder="Write notes in Markdown for this source…&#10;&#10;'Summarize' appends a summary of the document to this page."></textarea>
+        <div id="note-preview" class="note-preview prose hidden">
+          <p class="muted">Select a source in the library to read and edit its notes.</p>
+        </div>
+        <div id="anchor-layer" class="anchor-layer"></div>
+        <div id="note-mirror" class="note-mirror" aria-hidden="true"></div>
+    </div>
+    <div class="note-foot">
+        <span id="note-hint" class="muted">Ctrl+D toggles preview</span>
+        <span id="note-anchor-state" class="save-state warn"></span>
+        <span id="note-save-state" class="save-state"></span>
+        <span class="foot-actions">
+            <button id="btn-send" class="btn small" title="Send the selected text elsewhere">Send to…</button>
+            <button id="btn-import-notes" class="btn small" title="Import a note page from another project">Import page…</button>
+            <button id="btn-summarize" class="btn small primary" disabled
+                  title="Append a summary of the document to this note page">Summarize</button>
+        </span>
+    </div>
+</section>

@@ -41,7 +41,6 @@ body {
   flex: 0 0 auto;
 }
 .brand { font-weight: 700; font-size: 16px; letter-spacing: .3px; }
-.brand-sub { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
 .top-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 
 .btn {
@@ -525,6 +524,8 @@ select.input { padding: 6px 8px; }
 .page-head h1 { margin: 0 0 2px; font-size: 22px; }
 .page-head p { margin: 0 0 12px; color: var(--muted); }
 .search.wide { width: 100%; max-width: 520px; margin: 6px 0 2px; }
+.page-tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.page-tools .search.wide { flex: 1 1 260px; }
 
 .prj-list.grid {
   display: grid;

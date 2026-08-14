@@ -10,17 +10,13 @@
 </head>
 <body>
 
-<header class="topbar">
-  <div class="brand">KNDB<span class="brand-sub">knowledge database</span></div>
-  <nav class="top-nav">
-    <a href="/" class="tab">Sources</a>
-    <a href="/projects" class="tab active">Projects</a>
-  </nav>
-</header>
 
-<!-- Everything about *this* project lives on this bar: going back up, the name,
-     its state, and who you are while you work on it. The global header stays
-     global. -->
+{% set active_tab = "projects" %}
+{% set user_workspace = false %}
+
+
+{% include "templates/kndb_header.html" %}
+
 <div class="subbar">
   <a href="/projects" class="icon-btn sub-back" title="All projects" aria-label="All projects">
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
@@ -75,85 +71,15 @@
 
   <!-- ======================= LIBRARY ======================= -->
   <div id="tab-library" class="tab-pane library hidden">
-    <section id="panel-dir" class="panel">
-      <!-- Same head as the personal workspace, down to the fold toggle: one
-           library page, drawn by library.js on both. -->
-      <div class="panel-head lib-head">
-        <div class="lib-title">
-          <button id="btn-fold-dir" class="icon-btn" aria-expanded="true"
-                  title="Hide the library">
-            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-              <rect x="1.5" y="2.5" width="13" height="11" rx="2"
-                    fill="none" stroke="currentColor"></rect>
-              <line x1="6.5" y1="2.5" x2="6.5" y2="13.5" stroke="currentColor"></line>
-            </svg>
-          </button>
-          <span>Library</span>
-          <span id="dir-count" class="muted"></span>
-        </div>
-        <div class="head-actions">
-          <button id="btn-import" class="btn small" title="Import a source into this project">+ Import</button>
-          <button id="btn-new-folder" class="btn small" title="New folder">+ Folder</button>
-          <button id="btn-new-note" class="btn small" title="New standalone note">+ Note</button>
-        </div>
-      </div>
-      <input id="search" class="search" type="search" spellcheck="false"
-             placeholder="Filter this library…  @tag">
-      <div id="dir-list" class="dir-list tree"></div>
-    </section>
+    {% include "templates/source_browser.html" %}
+
     <div class="splitter" data-split="dir"></div>
 
-    <section id="panel-res" class="panel">
-      <div class="panel-head">
-        <span id="res-title" class="panel-title">Resource</span>
-        <span id="res-meta" class="pill hidden"></span>
-        <span class="head-actions">
-          <button id="btn-edit-tags" class="btn small" disabled
-                  title="Add or remove tags (@tag search)">Tags</button>
-          <button id="btn-close-res" class="icon-btn" disabled
-                  title="Close — clears the viewer and the notes beside it">
-            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
-              <line x1="4.5" y1="4.5" x2="11.5" y2="11.5" stroke="currentColor"></line>
-              <line x1="11.5" y1="4.5" x2="4.5" y2="11.5" stroke="currentColor"></line>
-            </svg>
-          </button>
-        </span>
-      </div>
-      <div id="res-body" class="res-body">
-        <div id="res-empty" class="empty">Select a source from the library to read it and<br>
-          take notes on it next to it.</div>
-        <iframe id="res-frame" class="res-frame hidden" sandbox="allow-same-origin allow-scripts"></iframe>
-        <div id="res-pdf" class="pdfview hidden"></div>
-        <div id="res-md" class="res-md prose hidden"></div>
-      </div>
-    </section>
+    {% include "templates/source_viewer.html" %}
+
     <div class="splitter" data-split="res"></div>
 
-    <section id="panel-note" class="panel">
-      <div id="note-tabs" class="note-tabs hidden"></div>
-      <div id="blame-legend" class="blame-legend hidden"></div>
-      <div class="note-wrap">
-        <div id="blame-gutter" class="blame-gutter hidden"></div>
-        <textarea id="note-editor" class="note-editor hidden" spellcheck="false"
-                  placeholder="Write notes in Markdown for this source…&#10;&#10;'Summarize' appends a summary of the document to this page."></textarea>
-        <div id="note-preview" class="note-preview prose hidden">
-          <p class="muted">Select a source in the library to read and edit its notes.</p>
-        </div>
-        <div id="anchor-layer" class="anchor-layer"></div>
-        <div id="note-mirror" class="note-mirror" aria-hidden="true"></div>
-      </div>
-      <div class="note-foot">
-        <span id="note-hint" class="muted">Ctrl+D toggles preview</span>
-        <span id="note-anchor-state" class="save-state warn"></span>
-        <span id="note-save-state" class="save-state"></span>
-        <span class="foot-actions">
-          <button id="btn-send" class="btn small" title="Send the selected text elsewhere">Send to…</button>
-          <button id="btn-import-notes" class="btn small" title="Import a note page from another project">Import page…</button>
-          <button id="btn-summarize" class="btn small primary" disabled
-                  title="Append a summary of the document to this note page">Summarize</button>
-        </span>
-      </div>
-    </section>
+    {% include "templates/notes_editor.html" %}
   </div>
 
   <!-- ======================= LATEX ======================= -->
@@ -263,7 +189,7 @@
     <div class="modal-head"><h3>Summarize the document</h3><button class="x" data-close="modal-summarize">×</button></div>
     <div class="modal-body">
       <div class="row3">
-        <div><label class="lbl">Length</label><select id="su-length" class="input"><option value="short">short</option><option value="medium" selected>medium</option><option value="detailed">detailed</option></select></div>
+        <div><label class="lbl">Length</label><select id="su-length" class="input"><option value="short">short</option><option value="medium">medium</option><option value="detailed" selected>detailed</option></select></div>
         <div><label class="lbl">Language</label><input id="su-language" class="input" value="English" spellcheck="false"></div>
       </div>
       <div class="modal-actions">

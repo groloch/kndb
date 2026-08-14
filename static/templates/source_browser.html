@@ -1,0 +1,24 @@
+<section id="panel-dir" class="panel">
+    <div class="panel-head lib-head">
+        <div class="lib-title">
+        <button id="btn-fold-dir" class="icon-btn" aria-expanded="true"
+                title="Hide the library">
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="2"
+                    fill="none" stroke="currentColor"></rect>
+            <line x1="6.5" y1="2.5" x2="6.5" y2="13.5" stroke="currentColor"></line>
+            </svg>
+        </button>
+        <span>Library</span>
+        <span id="dir-count" class="muted"></span>
+        </div>
+        <div class="head-actions">
+            <button id="btn-import" class="btn small" title="Import a source">+ Import</button>
+            <button id="btn-new-folder" class="btn small" title="New folder">+ Folder</button>
+            <button id="btn-new-note" class="btn small" title="New standalone note">+ Note</button>
+        </div>
+    </div>
+    <input id="search" class="search" type="search" spellcheck="false"
+            placeholder="Search title…  @tag  /project">
+    <div id="dir-list" class="dir-list tree"></div>
+</section>
