@@ -1,20 +1,15 @@
 "use strict";
 
-/* Personal workspace page. $, api, toast, renderMarkdown, modals and the
- * identity header live in common.js, which must load first. */
+/* Personal workspace. The library page itself — tree, viewers, note editor —
+ * is library.js, shared with the project pages; what is left here is what only
+ * the workspace does: importing, summarizing, and the quiz.
+ *
+ * $, api, toast, renderMarkdown, modals and the identity header live in
+ * common.js, which must load first. */
 
 const S = {
   pid: "",            // the workspace is a project like any other
-  sources: [],
-  standalone: [],     // standalone note pages in the workspace tree
-  sel: null,          // {kind:"source"|"note"|"folder", id} — mirrors TREE.sel
-  current: null,      // the selected source row, or null
-  noteId: null,       // the note page being edited, whatever selected it
   noteVersion: 1,
-  noteMode: "preview",
-  noteDirty: false,
-  saveTimer: null,
-  compileTimer: null,  // standalone notes: viewer redraw, independent of saving
   streaming: false,
   quiz: null,          // quiz hub: the loaded quiz
   quizStats: null,     // quiz hub: its spaced-repetition stats
@@ -74,237 +69,74 @@ function setBusy(btn, busy, label) {
   }
 }
 
-/* ---------- The library tree ---------- */
 
-const TREE = makeTree({
-  host: $("#dir-list"),
-  readOnly: () => false,
-  role: () => KNDB.ownerRole,   // you own your own workspace
-  showQuestions: () => true,
-  removeTitle: "Delete source",
-  empty: '<div class="empty">No sources yet.<br>Add one with <b>+ Import</b>.</div>',
-  reload: refreshTree,
-  onSelect: openRef,
-  onRemoveSource: deleteSource,
-  onDeleteNote: deleteNotePage,
-});
+/* ---------- The library page ---------- */
 
-$("#btn-new-folder").addEventListener("click", () => TREE.newFolder());
-$("#btn-new-note").addEventListener("click", () => TREE.newNote());
+/* One note per source here, and it is yours: no pages, no roles, no blame. */
 
-async function refreshTree() {
-  let t;
-  try {
-    t = await api(`/api/projects/${S.pid}/tree`);
-  } catch (e) {
-    toast("Failed to load sources: " + e.message, "err");
-    return;
-  }
-  S.sources = t.sources;
-  S.standalone = t.notes;
-  const n = S.sources.length;
-  $("#dir-count").textContent = n ? `${n} source${n === 1 ? "" : "s"}` : "";
-  TREE.setData({ folders: t.folders, sources: t.sources, notes: t.notes });
-  TREE.render();
-  if (S.sel && !TREE.sel) resetNoSource();
-}
+const LIB = makeLibrary({
+  projectId: () => S.pid,
+  keys: "kndb.",
+  noteMode: "preview",
 
+  tree: {
+    readOnly: () => false,
+    role: () => KNDB.ownerRole,   // you own your own workspace
+    showQuestions: () => true,
+    removeTitle: "Delete source",
+    empty: '<div class="empty">No sources yet.<br>Add one with <b>+ Import</b>.</div>',
+    onRemoveSource: deleteSource,
+    onDeleteNote: deleteNotePage,
+  },
 
-/* ---------- Selection ---------- */
+  anchors: {
+    // The workspace has one member; without their colour every link would be
+    // drawn in the "someone else" grey.
+    colors: () => Object.fromEntries(
+      ((KNDB.personal && KNDB.personal.members) || []).map(m => [m.name, m.color])),
+  },
 
-function selectSource(id, noteMode = "preview") {
-  S.noteMode = noteMode;
-  return TREE.setSelection({ kind: "source", id });
-}
+  // Nothing may move while a summary is streaming into the note it would leave.
+  canSelect: () => {
+    if (!S.streaming) return true;
+    toast("Wait for the summary to finish first", "warn");
+    return false;
+  },
 
-/** Every selection lands here, whatever opened it. */
-async function openRef(ref) {
-  if (S.streaming) { toast("Wait for the summary to finish first", "warn"); return; }
-  if (S.noteDirty) await saveNote();
-  S.sel = ref;
-  // Closing is about the selection, not about having a document: a folder and a
-  // standalone note can be closed too.
-  $("#btn-close-res").disabled = !ref;
-  if (!ref) return resetNoSource();
-  if (ref.kind === "source") return openSource(ref.id);
-  if (ref.kind === "note") return openStandalone(ref.id);
-  return openFolder(ref.id);
-}
-
-async function openSource(id) {
-  const s = S.sources.find(x => x.id === id);
-  if (!s) return;
-  S.current = s;
-  setToolbar(s);
-  await loadResource(s);
-  await loadNote(s);
-  applyNoteMode();
-}
-
-async function openFolder(path) {
-  S.current = null;
-  S.noteId = null;
-  setToolbar(null);
-  $("#note-editor").classList.add("hidden");
-  $("#note-preview").classList.remove("hidden");
-  $("#note-preview").innerHTML =
-    `<p class="muted">Folder <b>${escapeHtml(path)}</b>. Its README is shown on the left; `
-    + "add one with <b>+ Note</b> named <code>README</code>.</p>";
-  const readme = (await api(`/api/projects/${S.pid}/readme?folder=`
-                            + encodeURIComponent(path))).note;
-  showCompiled(path, readme ? readme.content : "*No README in this folder yet.*");
-}
-
-async function openStandalone(nid) {
-  S.current = null;
-  setToolbar(null);
-  const d = await api(`/api/notes/${nid}`);
-  S.noteId = d.note.id;
-  S.noteVersion = d.note.version;
-  S.noteName = d.note.name;
-  $("#note-editor").value = d.note.content;
-  $("#note-save-state").textContent = "";
-  S.noteDirty = false;
-  // A standalone note has no document to show, so the viewer renders the note
-  // itself — which makes the editor a live preview.
-  S.noteMode = "edit";
-  applyNoteMode();
-  showCompiled(d.note.name, d.note.content);
-  await ANCHORS.load();   // a standalone note has no source: this clears them
-}
-
-/** Hide every viewer. Each of the three is exclusive, and the PDF one holds a
- *  worker and a pile of canvases, so leaving it costs more than a class. */
-function clearViewers() {
-  PDFView.destroy();
-  $("#res-frame").classList.add("hidden");
-  $("#res-frame").src = "about:blank";
-  $("#res-md").classList.add("hidden");
-  $("#res-empty").classList.add("hidden");
-}
-
-function showCompiled(title, markdown) {
-  $("#res-title").textContent = title || "Note";
-  $("#res-meta").classList.add("hidden");
-  clearViewers();
-  const md = $("#res-md");
-  md.innerHTML = renderMarkdown(markdown);
-  md.classList.remove("hidden");
-}
-
-/** Recompile the viewer from the textarea, keeping the reader where it was:
- *  a standalone note is redrawn on every pause in the typing. */
-function recompileNote() {
-  const md = $("#res-md");
-  const top = md.scrollTop;
-  md.innerHTML = renderMarkdown($("#note-editor").value);
-  md.scrollTop = top;
-}
-
-/* The viewer *is* the note when there is no document, so it follows the
- * keystrokes instead of waiting for the save round-trip. Markdown plus
- * sanitising is not free on a long note, hence the short idle delay. */
-function scheduleCompile() {
-  if (!S.sel || S.sel.kind !== "note") return;
-  clearTimeout(S.compileTimer);
-  S.compileTimer = setTimeout(recompileNote, 150);
-}
-
-function setToolbar(s) {
-  const on = !!s;
-  ["btn-edit-tags", "btn-quiz", "btn-summarize"]
-    .forEach(id => { $(`#${id}`).disabled = !on; });
-}
-
-function resetNoSource() {
-  S.current = null;
-  S.sel = null;
-  S.noteId = null;
-  $("#res-title").textContent = "Resource";
-  $("#res-meta").textContent = "";
-  $("#res-meta").classList.add("hidden");
-  clearViewers();
-  $("#res-md").innerHTML = "";
-  $("#res-empty").classList.remove("hidden");
-  $("#note-editor").value = "";
-  $("#note-preview").innerHTML = '<p class="muted">Select a source in the directory to read and edit its notes.</p>';
-  $("#note-editor").classList.add("hidden");
-  $("#note-preview").classList.remove("hidden");
-  $("#note-save-state").textContent = "";
-  setToolbar(null);
-  $("#btn-close-res").disabled = true;
-  ANCHORS.clear();
-}
-
-// Deselecting is the same path as selecting, so a pending note is saved and the
-// tree drops its highlight along with the viewer and the notes.
-$("#btn-close-res").addEventListener("click", () => TREE.setSelection(null));
-
-async function loadResource(s) {
-  $("#res-title").textContent = s.title;
-  $("#res-meta").textContent = s.source_type;
-  $("#res-meta").classList.remove("hidden");
-  const md = $("#res-md"), empty = $("#res-empty");
-  clearViewers();
-  const src = `/api/source/${s.id}/content`;
-  if (s.source_type === "md") {
+  loadNotes: async s => {
     try {
-      const res = await fetch(src);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      md.innerHTML = renderMarkdown(await res.text());
-      md.classList.remove("hidden");
+      const d = await api(`/api/note/${s.id}`);
+      S.noteVersion = d.version;
+      $("#note-editor").value = d.content;
+      return { id: d.note_id, name: s.title, content: d.content };
     } catch (e) {
-      empty.textContent = "Could not load the markdown source: " + e.message;
-      empty.classList.remove("hidden");
+      toast("Failed to load note: " + e.message, "err");
+      return null;
     }
-  } else if (isPdf(s)) {
-    await PDFView.open(src, $("#res-pdf"));
-  } else {
-    $("#res-frame").src = src;
-    $("#res-frame").classList.remove("hidden");
-  }
-}
+  },
 
+  loadNote: async nid => {
+    try {
+      const d = await api(`/api/notes/${nid}`);
+      S.noteVersion = d.note.version;
+      $("#note-editor").value = d.note.content;
+      return d.note;
+    } catch (e) {
+      toast("Failed to load note: " + e.message, "err");
+      return null;
+    }
+  },
 
-
-async function loadNote(s) {
-  try {
-    const data = await api(`/api/note/${s.id}`);
-    S.noteContent = data.content;
-    S.noteId = data.note_id;
-    S.noteVersion = data.version;
-    $("#note-editor").value = S.noteContent;
-    $("#note-preview").innerHTML = renderMarkdown(S.noteContent);
-    $("#note-save-state").textContent = "";
-    await ANCHORS.load();
-  } catch (e) {
-    toast("Failed to load note: " + e.message, "err");
-  }
-}
-
-function onNoteTyped() {
-  if (!S.noteId || S.streaming) return;
-  S.noteDirty = true;
-  $("#note-save-state").textContent = "unsaved…";
-  clearTimeout(S.saveTimer);
-  S.saveTimer = setTimeout(saveNote, 1200);
-  scheduleCompile();
-}
-
-async function saveNote() {
-  if (!S.noteId || !S.noteDirty) return;
-  const content = $("#note-editor").value;
-  S.noteDirty = false;
-  try {
-    if (S.current) {
+  persist: async (content, nid) => {
+    if (LIB.source) {
       // The source route resolves the workspace's single page for us.
-      const d = await api(`/api/note/${S.current.id}`, {
+      const d = await api(`/api/note/${LIB.source.id}`, {
         method: "PUT",
         body: { content, base_version: S.noteVersion },
       });
       S.noteVersion = d.version;
     } else {
-      const d = await api(`/api/notes/${S.noteId}`, {
+      const d = await api(`/api/notes/${nid}`, {
         method: "PUT",
         body: { content, base_version: S.noteVersion },
       });
@@ -312,89 +144,42 @@ async function saveNote() {
       // The viewer already follows the editor as it is typed; redrawing it from
       // the response would only throw the reader back to the top of the note.
     }
-    $("#note-save-state").textContent = "saved";
-    // A sentence that is gone from the saved text takes its link with it.
-    await ANCHORS.pruneLost();
-  } catch (e) {
-    S.noteDirty = true;
-    $("#note-save-state").textContent = "save error";
-    toast("Note save failed: " + e.message, "err");
-  }
-}
-
-function applyNoteMode() {
-  const standalone = S.sel && S.sel.kind === "note";
-  const edit = standalone || S.noteMode === "edit";
-  $("#note-editor").classList.toggle("hidden", !edit);
-  $("#note-preview").classList.toggle("hidden", edit);
-  $("#note-hint").textContent = standalone
-    ? "Live preview — the compiled note is shown on the left"
-    : "Ctrl+D toggles preview";
-  if (!edit) {
-    $("#note-preview").innerHTML = renderMarkdown($("#note-editor").value);
-  } else if (S.noteId) {
-    $("#note-editor").focus();
-  }
-  ANCHORS.draw();
-}
-
-
-/* ---------- Anchors: note sentences grounded in the document ---------- */
-
-/** What the viewer is showing, in the terms the anchoring module needs. */
-function docTarget() {
-  const s = S.current;
-  if (!s) return null;
-  if (isPdf(s)) return { kind: "pdf" };
-  if (s.source_type === "md") {
-    const root = $("#res-md");
-    return root.classList.contains("hidden")
-      ? null : { kind: "html", root, scroller: root };
-  }
-  const frame = $("#res-frame");
-  if (frame.classList.contains("hidden")) return null;
-  try {
-    const d = frame.contentDocument;
-    if (d && d.body) {
-      return { kind: "html", root: d.body,
-               scroller: d.scrollingElement || d.documentElement,
-               win: frame.contentWindow };
-    }
-  } catch (_) { /* cross-origin: not linkable */ }
-  return null;
-}
-
-const ANCHORS = makeAnchors({
-  editor: () => $("#note-editor"),
-  mirror: () => $("#note-mirror"),
-  layer: () => $("#anchor-layer"),
-  wrap: () => $(".note-wrap"),
-  preview: () => $("#note-preview"),
-  docPane: () => $("#panel-res"),
-  docTarget,
-  projectId: () => (KNDB.personal ? KNDB.personal.id : ""),
-  noteId: () => S.noteId || "",
-  // A standalone note has no document beside it, so nothing to link into.
-  sourceId: () => (S.current ? S.current.id : ""),
-  // The workspace has one member; without their colour every link would be
-  // drawn in the "someone else" grey.
-  colors: () => Object.fromEntries(
-    ((KNDB.personal && KNDB.personal.members) || []).map(m => [m.name, m.color])),
-  canLink: () => true,          // you own your workspace
-  inPreview: () => $("#note-editor").classList.contains("hidden"),
-  ensureEditMode: async () => {
-    if (!$("#note-editor").classList.contains("hidden")) return;
-    S.noteMode = "edit";
-    applyNoteMode();
   },
-  // One note per source here, so every link on this document is on this page.
-  openNote: async nid => nid === S.noteId,
-  onChange: ({ lost }) => {
-    $("#note-anchor-state").textContent = lost
-      ? lost + (lost === 1 ? " link no longer resolves" : " links no longer resolve")
-      : "";
+
+  onSelect: ref => {
+    const src = !!ref && ref.kind === "source";
+    ["btn-edit-tags", "btn-quiz", "btn-summarize"]
+      .forEach(id => { $(`#${id}`).disabled = !src; });
+  },
+
+  /* This box also understands "/project", which only the server can resolve, so
+   * sources are filtered by the ids it hands back; folders and standalone notes
+   * fall back to the name match every library shares. */
+  searchPredicate: async (q, local) => {
+    let ids = null;
+    try {
+      ids = new Set((await api("/api/sources?q=" + encodeURIComponent(q))).sources
+        .map(s => s.id));
+    } catch (e) { /* offline or a bad query: filter in the browser instead */ }
+    return (kind, item) =>
+      (kind === "source" && ids) ? ids.has(item.id) : local(kind, item);
   },
 });
+
+const refreshTree = LIB.refreshTree;
+
+/** Freshly imported sources open ready to write in; everything else opens on
+ *  what is already there. */
+async function selectSource(id, noteMode = "preview") {
+  await LIB.selectSource(id);
+  if (noteMode === "edit" && LIB.state.noteMode !== "edit") {
+    LIB.state.noteMode = "edit";
+    LIB.applyNoteMode();
+  }
+}
+
+
+/* ---------- Import ---------- */
 
 $("#btn-import").addEventListener("click", () => {
   $("#import-url").value = "";
@@ -431,7 +216,7 @@ $("#import-submit").addEventListener("click", async () => {
 });
 
 async function deleteSource(id) {
-  const s = S.sources.find(x => x.id === id);
+  const s = LIB.state.sources.find(x => x.id === id);
   if (!await confirmModal({
     title: "Delete source",
     body: `Delete “${s ? s.title : id}”, its notes, quiz and stats?`,
@@ -441,7 +226,7 @@ async function deleteSource(id) {
   })) return;
   try {
     await api("/api/source/" + id, { method: "DELETE" });
-    if (S.current && S.current.id === id) TREE.sel = null;
+    if (LIB.source && LIB.source.id === id) LIB.TREE.sel = null;
     await refreshTree();
     toast("Source deleted", "ok");
   } catch (e) {
@@ -450,7 +235,7 @@ async function deleteSource(id) {
 }
 
 async function deleteNotePage(nid) {
-  const page = S.standalone.find(n => n.id === nid);
+  const page = LIB.state.notes.find(n => n.id === nid);
   if (!await confirmModal({
     title: "Delete note page",
     body: `Delete the note page “${page ? page.name : nid}”?`,
@@ -460,7 +245,7 @@ async function deleteNotePage(nid) {
   })) return;
   try {
     await api(`/api/notes/${nid}`, { method: "DELETE" });
-    if (S.sel && S.sel.kind === "note" && S.sel.id === nid) TREE.sel = null;
+    if (LIB.sel && LIB.sel.kind === "note" && LIB.sel.id === nid) LIB.TREE.sel = null;
     await refreshTree();
     toast("Page deleted", "ok");
   } catch (e) {
@@ -482,18 +267,18 @@ const BOXES = [
 ];
 
 async function openQuizHub() {
-  if (!S.current) return;
+  if (!LIB.source) return;
   S.quiz = null;
   S.quizStats = null;
   openModal("#modal-quiz");
-  $("#quiz-hub-source").textContent = S.current.title;
+  $("#quiz-hub-source").textContent = LIB.source.title;
   $("#quiz-hub-stats").innerHTML = "";
   $("#quiz-hub-progress").innerHTML = '<p class="muted">Loading…</p>';
   $("#btn-quiz-play").disabled = true;
   try {
     const [quiz, stats] = await Promise.all([
-      api(`/api/quiz/${S.current.id}`),
-      api(`/api/quiz/${S.current.id}/stats`),
+      api(`/api/quiz/${LIB.source.id}`),
+      api(`/api/quiz/${LIB.source.id}/stats`),
     ]);
     S.quiz = quiz;
     S.quizStats = stats.stats || {};
@@ -579,7 +364,7 @@ $("#btn-quiz-gen").addEventListener("click", async () => {
 });
 
 $("#quiz-gen-submit").addEventListener("click", async () => {
-  if (!S.current) return;
+  if (!LIB.source) return;
   const btn = $("#quiz-gen-submit");
   const body = {
     scope: $('input[name="qz-scope"]:checked').value,
@@ -589,8 +374,8 @@ $("#quiz-gen-submit").addEventListener("click", async () => {
   };
   setBusy(btn, true, "Generating…");
   try {
-    await saveNote();
-    const done = await streamSSE(`/api/quiz/${S.current.id}/generate`, body);
+    await LIB.flushNote();
+    const done = await streamSSE(`/api/quiz/${LIB.source.id}/generate`, body);
     closeModal("#modal-quiz-gen");
     toast(`Quiz ready: ${done.questions} questions`, "ok");
     await refreshTree();
@@ -605,45 +390,47 @@ $("#quiz-gen-submit").addEventListener("click", async () => {
 $("#btn-summarize").addEventListener("click", () => openModal("#modal-summarize"));
 
 $("#summarize-submit").addEventListener("click", async () => {
-  if (!S.current) return;
+  const source = LIB.source;
+  if (!source) return;
   if (S.streaming) { toast("Already summarizing…", "warn"); return; }
   closeModal("#modal-summarize");
 
-  await saveNote();   // the summary is appended server-side, under what is saved there
+  await LIB.flushNote();   // the summary is appended server-side, under what is saved there
   // The summary is written into a specific note page, so send its id — the
   // server no longer has a notion of "the" note for a source.
   const body = {
     length: $("#su-length").value,
     language: $("#su-language").value.trim() || "English",
-    note_id: S.noteId,
+    note_id: LIB.noteId,
   };
   const editor = $("#note-editor");
-  const saveState = $("#note-save-state");
 
   // Turn on notes preview and lock editing while the summary streams in.
   S.streaming = true;
-  S.noteMode = "preview";
-  applyNoteMode();
+  LIB.state.noteMode = "preview";
+  LIB.applyNoteMode();
   editor.disabled = true;
-  saveState.textContent = "summarizing…";
+  LIB.setSaveState("summarizing…");
 
   // What the note already holds stays on screen: the summary lands under it.
   const before = editor.value.trim();
   let summary = "";
   const paint = () => {
     const preview = $("#note-preview");
-    const body = summary ? `${before}\n\n${summary}`.trim() : before;
-    preview.innerHTML = renderMarkdown(body) || '<p class="muted">Summarizing…</p>';
+    const text = summary ? `${before}\n\n${summary}`.trim() : before;
+    preview.innerHTML = renderMarkdown(text) || '<p class="muted">Summarizing…</p>';
     preview.scrollTop = preview.scrollHeight;
   };
   paint();
 
   try {
-    await streamSSE(`/api/summarize/${S.current.id}`, body, tok => {
+    await streamSSE(`/api/summarize/${source.id}`, body, tok => {
       summary += tok;
       paint();
     });
-    await loadNote(S.current);  // reload the finalized note (summary already written)
+    S.streaming = false;
+    // Pick up the finalized note (the summary is already written into it).
+    await LIB.selectSource(source.id);
     toast("Summary appended to your note", "ok");
   } catch (e) {
     if (summary) paint();  // keep whatever streamed so far visible
@@ -651,14 +438,14 @@ $("#summarize-submit").addEventListener("click", async () => {
   } finally {
     S.streaming = false;
     editor.disabled = false;
-    saveState.textContent = "";
+    LIB.setSaveState("");
   }
 });
 
 $("#btn-quiz-play").addEventListener("click", async () => {
-  if (!S.current || !S.quiz || !S.quiz.questions.length) return;
+  if (!LIB.source || !S.quiz || !S.quiz.questions.length) return;
   try {
-    const order = await api(`/api/quiz/${S.current.id}/order`);
+    const order = await api(`/api/quiz/${LIB.source.id}/order`);
     closeModal("#modal-quiz");
     startQuizSession(S.quiz, order.questions);
   } catch (e) {
@@ -669,6 +456,7 @@ $("#btn-quiz-play").addEventListener("click", async () => {
 function startQuizSession(quiz, questions) {
   const body = $("#quiz-body");
   const queue = [...questions];
+  const sid = LIB.source.id;
   let total = 0, correct = 0;
   const attempted = new Set();
   const requeued = new Set();
@@ -679,7 +467,6 @@ function startQuizSession(quiz, questions) {
   function renderIntro() {
     body.innerHTML = `
       <div class="quiz-summary">
-        <p class="muted">${escapeHtml(quiz.source_id ? "" : "")}</p>
         <p><strong>${questions.length}</strong> questions · due-for-review first · wrong answers come back once</p>
         <button class="btn primary" id="qz-start">Start session</button>
       </div>`;
@@ -738,7 +525,7 @@ function startQuizSession(quiz, questions) {
     const nxt = $("#qz-next");
     nxt.classList.remove("hidden");
     nxt.addEventListener("click", next);
-    api(`/api/quiz/${S.current.id}/answer`, {
+    api(`/api/quiz/${sid}/answer`, {
       method: "POST",
       body: { question_id: q.id, success: ok },
     }).catch(() => {});
@@ -761,20 +548,8 @@ function startQuizSession(quiz, questions) {
 }
 
 
-$("#note-editor").addEventListener("input", onNoteTyped);
-$("#note-editor").addEventListener("blur", () => { if (S.noteDirty) saveNote(); });
-
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") hideCtx();
-  if (e.ctrlKey && e.key.toLowerCase() === "d") {
-    // Still swallowed so the browser keeps its bookmark dialog out of the way,
-    // but it toggles nothing on a standalone note: that one is compiled into
-    // the viewer as it is typed, so there is no second rendering to switch to.
-    e.preventDefault();
-    if (!S.current || S.streaming) return;
-    S.noteMode = S.noteMode === "edit" ? "preview" : "edit";
-    applyNoteMode();
-  }
 });
 
 document.addEventListener("click", e => {
@@ -791,10 +566,10 @@ $$(".modal").forEach(m => m.addEventListener("mousedown", e => {
  * same dialog. Tags are stored on the source row, which is why one added here
  * shows up in every project holding that source. */
 function editTags() {
-  if (!S.current) return;
+  if (!LIB.source) return;
   openTagsModal({
-    source: S.current,
-    onSaved: () => TREE.render(),   // the unfolded row shows the same tags
+    source: LIB.source,
+    onSaved: () => LIB.TREE.render(),   // the unfolded row shows the same tags
   });
 }
 
@@ -803,12 +578,12 @@ $("#btn-edit-tags").addEventListener("click", editTags);
 /* ---------- Quiz management ---------- */
 
 async function openQuizManager() {
-  if (!S.current) return;
+  if (!LIB.source) return;
   S.qm = null;
   S.qmEditId = null;
   openModal("#modal-quiz-manage");
   try {
-    S.qm = await api(`/api/quiz/${S.current.id}`);
+    S.qm = await api(`/api/quiz/${LIB.source.id}`);
   } catch (e) {
     $("#qm-list").innerHTML = `<p class="muted">Could not load quiz: ${escapeHtml(e.message)}</p>`;
     return;
@@ -867,7 +642,7 @@ function loadQuizForm(qid) {
 
 async function refreshQuizManager() {
   try {
-    S.qm = await api(`/api/quiz/${S.current.id}`);
+    S.qm = await api(`/api/quiz/${LIB.source.id}`);
   } catch (_) {}
   renderQuizList();
   resetQuizForm();
@@ -875,7 +650,7 @@ async function refreshQuizManager() {
 }
 
 async function saveQuizForm() {
-  if (!S.current) return;
+  if (!LIB.source) return;
   const question = $("#qm-question").value.trim();
   const answers = [1, 2, 3, 4].map(i => $(`#qm-a${i}`).value.trim());
   const ansCount = answers.filter(Boolean).length;
@@ -888,11 +663,11 @@ async function saveQuizForm() {
   setBusy(btn, true, "Saving…");
   try {
     if (editing) {
-      await api(`/api/quiz/${S.current.id}/questions/${encodeURIComponent(S.qmEditId)}`, {
+      await api(`/api/quiz/${LIB.source.id}/questions/${encodeURIComponent(S.qmEditId)}`, {
         method: "PUT", body: { question, answers, answer_index },
       });
     } else {
-      await api(`/api/quiz/${S.current.id}/questions`, {
+      await api(`/api/quiz/${LIB.source.id}/questions`, {
         method: "POST", body: { question, answers, answer_index },
       });
     }
@@ -912,7 +687,7 @@ $("#qm-question").addEventListener("keydown", e => {
 });
 $("#qm-list").addEventListener("click", async e => {
   const act = e.target.closest("[data-act]");
-  if (!act || !S.current) return;
+  if (!act || !LIB.source) return;
   const item = e.target.closest(".qm-item");
   if (!item) return;
   const qid = item.dataset.qid;
@@ -925,7 +700,7 @@ $("#qm-list").addEventListener("click", async e => {
       danger: true,
     })) return;
     try {
-      await api(`/api/quiz/${S.current.id}/questions/${encodeURIComponent(qid)}`, { method: "DELETE" });
+      await api(`/api/quiz/${LIB.source.id}/questions/${encodeURIComponent(qid)}`, { method: "DELETE" });
       await refreshQuizManager();
       toast("Question deleted", "ok");
     } catch (err) {
@@ -954,7 +729,7 @@ function showCtxMenu(x, y, s) {
     b.textContent = it.label;
     b.addEventListener("click", async () => {
       hideCtx();
-      if (!S.current || S.current.id !== s.id) await selectSource(s.id, "preview");
+      if (!LIB.source || LIB.source.id !== s.id) await selectSource(s.id, "preview");
       if (it.label === "Quiz…") openQuizHub();
       else if (it.label === "Tags…") editTags();
       else deleteSource(s.id);
@@ -973,9 +748,9 @@ document.addEventListener("contextmenu", e => {
   const item = e.target.closest(".tree-row.source");
   if (!item) { hideCtx(); return; }
   e.preventDefault();
-  const s = S.sources.find(x => x.id === item.dataset.id);
+  const s = LIB.state.sources.find(x => x.id === item.dataset.id);
   if (!s) return;
-  if (!S.current || S.current.id !== s.id) selectSource(s.id, "preview");  // preload target
+  if (!LIB.source || LIB.source.id !== s.id) selectSource(s.id, "preview");  // preload target
   showCtxMenu(e.clientX, e.clientY, s);
 });
 
@@ -983,62 +758,6 @@ document.addEventListener("click", e => {
   if (!e.target.closest("#ctx-menu")) hideCtx();
 });
 
-let _searchTimer;
-$("#search").addEventListener("input", () => {
-  clearTimeout(_searchTimer);
-  _searchTimer = setTimeout(applySearch, 300);
-});
-
-/** This box also understands "/project", which only the server can resolve, so
- *  sources are filtered by the ids it hands back; folders and standalone notes
- *  fall back to the name match both pages share. */
-async function applySearch() {
-  const q = $("#search").value.trim();
-  if (!q) return TREE.applyFilter(null);
-  const local = TREE.queryPredicate(q);
-  let ids = null;
-  try {
-    ids = new Set((await api("/api/sources?q=" + encodeURIComponent(q))).sources
-      .map(s => s.id));
-  } catch (e) { /* offline or a bad query: filter in the browser instead */ }
-  TREE.applyFilter((kind, item) =>
-    (kind === "source" && ids) ? ids.has(item.id) : local(kind, item));
-}
-
-function setupSplitter(handle, leftPanel, storageKey, min = 0.14, max = 0.72) {
-  const saved = parseFloat(localStorage.getItem(storageKey));
-  if (saved) leftPanel.style.flex = `0 0 ${(saved * 100).toFixed(2)}%`;
-  handle.addEventListener("mousedown", e => {
-    e.preventDefault();
-    document.body.classList.add("resizing");
-    const onMove = ev => {
-      const rect = $("#main").getBoundingClientRect();
-      let f = (ev.clientX - rect.left) / rect.width;
-      f = Math.max(min, Math.min(max, f));
-      leftPanel.style.flex = `0 0 ${(f * 100).toFixed(2)}%`;
-      localStorage.setItem(storageKey, String(f));
-    };
-    const onUp = () => {
-      document.body.classList.remove("resizing");
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  });
-}
-
-function setDirFolded(folded) {
-  $("#panel-dir").classList.toggle("folded", folded);
-  const btn = $("#btn-fold-dir");
-  btn.setAttribute("aria-expanded", String(!folded));
-  btn.title = folded ? "Show the library" : "Hide the library";
-  localStorage.setItem("kndb.fold.dir", folded ? "1" : "0");
-}
-
-$("#btn-fold-dir").addEventListener("click", () => {
-  setDirFolded(!$("#panel-dir").classList.contains("folded"));
-});
 
 async function init() {
   await initIdentity();
@@ -1047,15 +766,11 @@ async function init() {
     toast("Could not reach the server — reload to try again", "err", 9000);
     return;
   }
-  TREE.setProject(S.pid);
-  setupSplitter($('.splitter[data-split="dir"]'), $("#panel-dir"), "kndb.w.dir");
-  setupSplitter($('.splitter[data-split="res"]'), $("#panel-res"), "kndb.w.res");
-  setDirFolded(localStorage.getItem("kndb.fold.dir") === "1");
-  await refreshTree();
+  await LIB.start();
   const m = location.hash.match(/^#src=([\w]+)/);
   if (m) {
     const srcId = decodeURIComponent(m[1]);
-    if (S.sources.some(s => s.id === srcId)) await selectSource(srcId, "preview");
+    if (LIB.state.sources.some(s => s.id === srcId)) await selectSource(srcId, "preview");
   }
   api("/api/llm/status").then(d => {
     const el = $("#llm-status");

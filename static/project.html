@@ -16,21 +16,27 @@
     <a href="/" class="tab">Sources</a>
     <a href="/projects" class="tab active">Projects</a>
   </nav>
-  <div class="top-actions">
-    <span id="prj-badge" class="pill type-completed hidden">completed</span>
-    <span id="user-switch" class="user-switch"></span>
-    <a href="/projects" class="btn small">← All projects</a>
-  </div>
 </header>
 
+<!-- Everything about *this* project lives on this bar: going back up, the name,
+     its state, and who you are while you work on it. The global header stays
+     global. -->
 <div class="subbar">
+  <a href="/projects" class="icon-btn sub-back" title="All projects" aria-label="All projects">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <line x1="13" y1="8" x2="3.5" y2="8" stroke="currentColor"></line>
+      <polyline points="7.5,4 3.5,8 7.5,12" fill="none" stroke="currentColor"></polyline>
+    </svg>
+  </a>
   <div class="sub-name" id="sub-name">…</div>
+  <span id="prj-badge" class="pill type-completed hidden">completed</span>
   <nav class="sub-tabs">
     <button class="subtab active" data-tab="overview">Overview</button>
     <button class="subtab" data-tab="library">Library</button>
     <button class="subtab" data-tab="latex">LaTeX editor</button>
     <button class="subtab" data-tab="settings">Settings</button>
   </nav>
+  <span id="user-switch" class="user-switch"></span>
 </div>
 
 <main id="main" class="main">
@@ -70,14 +76,26 @@
   <!-- ======================= LIBRARY ======================= -->
   <div id="tab-library" class="tab-pane library hidden">
     <section id="panel-dir" class="panel">
-      <div class="panel-head">
-        <span>Library</span>
-        <span id="dir-count" class="muted" style="text-transform:none;"></span>
-        <span class="head-actions">
+      <!-- Same head as the personal workspace, down to the fold toggle: one
+           library page, drawn by library.js on both. -->
+      <div class="panel-head lib-head">
+        <div class="lib-title">
+          <button id="btn-fold-dir" class="icon-btn" aria-expanded="true"
+                  title="Hide the library">
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="2"
+                    fill="none" stroke="currentColor"></rect>
+              <line x1="6.5" y1="2.5" x2="6.5" y2="13.5" stroke="currentColor"></line>
+            </svg>
+          </button>
+          <span>Library</span>
+          <span id="dir-count" class="muted"></span>
+        </div>
+        <div class="head-actions">
           <button id="btn-import" class="btn small" title="Import a source into this project">+ Import</button>
           <button id="btn-new-folder" class="btn small" title="New folder">+ Folder</button>
           <button id="btn-new-note" class="btn small" title="New standalone note">+ Note</button>
-        </span>
+        </div>
       </div>
       <input id="search" class="search" type="search" spellcheck="false"
              placeholder="Filter this library…  @tag">
@@ -92,6 +110,13 @@
         <span class="head-actions">
           <button id="btn-edit-tags" class="btn small" disabled
                   title="Add or remove tags (@tag search)">Tags</button>
+          <button id="btn-close-res" class="icon-btn" disabled
+                  title="Close — clears the viewer and the notes beside it">
+            <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+              <line x1="4.5" y1="4.5" x2="11.5" y2="11.5" stroke="currentColor"></line>
+              <line x1="11.5" y1="4.5" x2="4.5" y2="11.5" stroke="currentColor"></line>
+            </svg>
+          </button>
         </span>
       </div>
       <div id="res-body" class="res-body">
@@ -259,6 +284,7 @@
 <script src="/static/surface.js"></script>
 <script src="/static/anchors.js"></script>
 <script src="/static/tree.js"></script>
+<script src="/static/library.js"></script>
 <script src="/static/project.js"></script>
 </body>
 </html>

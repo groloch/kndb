@@ -12,18 +12,26 @@ router = APIRouter()
 BASE_DIR = str(config.BASE_DIR)
 
 
+def page(name: str) -> FileResponse:
+    # Without a Cache-Control header a browser invents its own freshness from
+    # Last-Modified, and a reload after an edit can quietly serve yesterday's
+    # markup against today's scripts. Revalidating costs one 304.
+    return FileResponse(os.path.join(BASE_DIR, "static", name),
+                        headers={"Cache-Control": "no-cache"})
+
+
 @router.get("/")
 async def index():
-    return FileResponse(os.path.join(BASE_DIR, "static", "index.html"))
+    return page("index.html")
 
 
 @router.get("/projects")
 async def projects_page():
-    return FileResponse(os.path.join(BASE_DIR, "static", "projects.html"))
+    return page("projects.html")
 
 
 @router.get("/projects/{pid}")
 async def project_page(pid: str):
     if not await projects.get_project(pid):
         raise HTTPException(404, f"project {pid} not found")
-    return FileResponse(os.path.join(BASE_DIR, "static", "project.html"))
+    return page("project.html")

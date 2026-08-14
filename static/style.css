@@ -566,6 +566,9 @@ select.input { padding: 6px 8px; }
   border-bottom: 1px solid var(--border);
   flex: 0 0 auto; min-height: 46px;
 }
+/* The gap the subbar uses between its groups is too wide between an arrow and
+   the name it points away from — they read as one control. */
+.sub-back { margin-right: -9px; }
 .sub-name {
   font-weight: 600; font-size: 14px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

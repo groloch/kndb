@@ -53,9 +53,19 @@ app.include_router(anchors_routes.router)
 app.include_router(transfer_routes.router)
 app.include_router(pages_routes.router)
 
+class RevalidatingStatic(StaticFiles):
+    """Nothing here is fingerprinted, so a cached page script outlives the page
+    that agrees with it. Revalidating every asset costs a 304 apiece."""
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 app.mount(
     "/static",
-    StaticFiles(directory=os.path.join(BASE_DIR, "static")),
+    RevalidatingStatic(directory=os.path.join(BASE_DIR, "static")),
     name="static",
 )
 

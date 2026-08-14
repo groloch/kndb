@@ -1,7 +1,10 @@
 "use strict";
 
-/* Project workspace. Shared helpers ($, api, toast, renderMarkdown, blame…)
- * come from common.js. */
+/* Project workspace. Its Library tab is the same page as the personal
+ * workspace, drawn by library.js; what is left here is what a project adds to
+ * it — several note pages per source, blame, transfers — plus the tabs around
+ * it. Shared helpers ($, api, toast, renderMarkdown, blame…) come from
+ * common.js. */
 
 // project id comes from the URL /projects/<pid>
 const PID = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
@@ -16,15 +19,8 @@ const S = {
   folders: [],
   standalone: [],    // standalone note pages
   readOnly: false,
-  sel: null,         // {kind:"source"|"note"|"folder", id} — mirrors TREE.sel
   pages: [],         // note pages for the selected source
   note: null,        // the loaded page {id, content, blame, version…}
-  // Projects open in edit mode: the blame gutter is line-exact and therefore
-  // only drawn over the textarea, and knowing who wrote what is the point of
-  // reading someone else's page. Ctrl+D still flips to rendered preview.
-  noteMode: "edit",
-  noteDirty: false,
-  saveTimer: null,
 };
 
 
@@ -44,30 +40,108 @@ document.addEventListener("click", e => {
   const srcRow = e.target.closest(".ov-src-row");
   if (srcRow) {
     switchTab("library");
-    selectSource(srcRow.dataset.id);
+    LIB.selectSource(srcRow.dataset.id);
   }
 });
 
 
-/* ---------- The library tree (shared with the personal workspace) ---------- */
+/* ---------- The library page ---------- */
 
-const TREE = makeTree({
-  host: $("#dir-list"),
-  readOnly: () => S.readOnly,
-  role: () => S.role,
-  showQuestions: () => !!S.caps.allow_quiz,
-  removeTitle: "Remove from project",
-  empty: '<div class="empty">Nothing here yet.<br>'
-       + "Use <b>+ Import</b> to bring in a source.</div>",
-  reload: refreshTree,
-  onSelect: openRef,
-  onRemoveSource: removeSource,
-  onDeleteNote: deletePage,
+/* Projects open a note in edit mode: the blame gutter is line-exact and
+ * therefore only drawn over the textarea, and knowing who wrote what is the
+ * point of reading someone else's page. Ctrl+D still flips to the preview. */
+
+const LIB = makeLibrary({
+  projectId: () => PID,
+  root: () => $("#tab-library"),
+  keys: "kndb.prj.",
+  noteMode: "edit",
+
+  tree: {
+    readOnly: () => S.readOnly,
+    role: () => S.role,
+    showQuestions: () => !!S.caps.allow_quiz,
+    removeTitle: "Remove from project",
+    empty: '<div class="empty">Nothing here yet.<br>'
+         + "Use <b>+ Import</b> to bring in a source.</div>",
+    onRemoveSource: removeSource,
+    onDeleteNote: deletePage,
+  },
+
+  anchors: {
+    colors: () => S.colors,
+    canLink: () => !S.readOnly && S.canEdit !== false,
+    // A link can point into a page other than the one on screen, so following
+    // it has to be able to open that page first.
+    openNote: async nid => {
+      await LIB.flushNote();
+      const ok = !!await loadNote(nid);
+      renderNoteTabs();
+      return ok;
+    },
+  },
+
+  onTree: t => {
+    S.rows = t.sources;
+    S.folders = t.folders;
+    S.standalone = t.notes;
+    S.colors = t.colors || {};
+  },
+
+  loadNotes: s => loadPages(s.id),
+  loadNote,
+
+  persist: async (content, nid) => {
+    const d = await api("/api/notes/" + nid, {
+      method: "PUT",
+      body: { content, base_version: S.note.version },
+    });
+    if (!S.note || S.note.id !== nid) return;
+    S.note = d.note;
+    renderBlameLegend(true);
+    renderGutter();
+    // Writing into a page can change who holds a line in it, and that is what
+    // decides whether the tab offers a delete button.
+    const page = S.pages.find(x => x.id === nid);
+    if (page && String(page.authors) !== String(d.note.authors)) {
+      page.authors = d.note.authors;
+      renderNoteTabs();
+    }
+  },
+
+  saveState: e => (e.status === 403 ? "not allowed" : "save error"),
+
+  onSaveError: async (e, nid) => {
+    if (e.status === 403) {
+      toast(e.message, "err", 7000);
+      // Put back what the server still holds so the editor cannot drift out of
+      // sync with a save that never landed.
+      await LIB.adoptNote(await loadNote(nid));
+    } else if (e.status === 409) {
+      toast(e.message + " — reloading the page", "warn", 6000);
+      await LIB.adoptNote(await loadNote(nid));
+    } else {
+      toast("Note save failed: " + e.message, "err");
+    }
+  },
+
+  onSelect: ref => {
+    $("#btn-edit-tags").disabled = !ref || ref.kind !== "source";
+    if (!ref || ref.kind !== "source") {
+      S.pages = [];
+      $("#note-tabs").classList.add("hidden");
+    }
+    if (!ref || ref.kind === "folder") {
+      S.note = null;
+      $("#blame-gutter").classList.add("hidden");
+      $("#blame-legend").classList.add("hidden");
+    }
+  },
+
+  // The gutter lines up with the textarea, so it is redrawn whenever the
+  // textarea is shown, hidden or resized.
+  onNoteMode: () => scheduleGutter(),
 });
-
-TREE.setProject(PID);
-$("#btn-new-folder").addEventListener("click", () => TREE.newFolder());
-$("#btn-new-note").addEventListener("click", () => TREE.newNote());
 
 
 /* ---------- Load ---------- */
@@ -96,188 +170,52 @@ async function loadProject() {
 
   renderSettings();
   loadTexDraft();
-  await refreshTree();
-  setupSplitters();
+  await LIB.start();
   renderOverview();
 }
 
-async function refreshTree() {
-  let t;
-  try {
-    t = await api("/api/projects/" + PID + "/tree");
-  } catch (e) {
-    toast("Failed to load the library: " + e.message, "err");
-    return;
-  }
-  S.rows = t.sources;
-  S.folders = t.folders;
-  S.standalone = t.notes;
-  S.colors = t.colors || {};
-  const n = S.rows.length;
-  $("#dir-count").textContent = n ? n + " source" + (n === 1 ? "" : "s") : "";
-  TREE.setData({ folders: t.folders, sources: t.sources, notes: t.notes });
-  TREE.render();
-  // setData drops a selection whose row is gone; the panels have to follow.
-  if (S.sel && !TREE.sel) resetSelection();
-}
+const refreshTree = () => LIB.refreshTree();
 
-
-
-/* ---------- Selection ---------- */
-
-function resetSelection() {
-  S.sel = null; S.note = null; S.pages = [];
-  $("#res-title").textContent = "Resource";
-  $("#res-meta").classList.add("hidden");
-  $("#btn-edit-tags").disabled = true;
-  const empty = $("#res-empty");
-  clearViewers();
-  $("#res-md").innerHTML = "";
-  empty.classList.remove("hidden");
-  empty.textContent = "Select a source from the library to read it and take notes next to it.";
-  $("#note-tabs").classList.add("hidden");
-  $("#note-editor").value = "";
-  $("#note-editor").classList.add("hidden");
-  $("#note-preview").classList.remove("hidden");
-  $("#note-preview").innerHTML = '<p class="muted">Select something in the library.</p>';
-  $("#blame-gutter").classList.add("hidden");
-  $("#blame-legend").classList.add("hidden");
-  $("#note-save-state").textContent = "";
-  ANCHORS.clear();
-}
-
-/** Every selection lands here, whether it came from a click in the tree, the
- *  overview, or an import that just finished. */
-async function openRef(ref) {
-  await flushNote();
-  S.sel = ref;
-  if (!ref) return resetSelection();
-  $("#btn-edit-tags").disabled = ref.kind !== "source";
-  if (ref.kind === "source") return selectedSource(ref.id);
-  if (ref.kind === "note") return selectedStandalone(ref.id);
-  return selectedFolder(ref.id);
-}
-
-function selectSource(id) { return TREE.setSelection({ kind: "source", id }); }
-
-async function selectedSource(id) {
-  const s = S.rows.find(x => x.id === id);
-  if (!s) return;
-  await loadResource(s);
-  await loadPages(id);
-}
-
-async function selectedFolder(path) {
-  S.pages = []; S.note = null;
-  ANCHORS.clear();
-  $("#note-tabs").classList.add("hidden");
-  $("#blame-gutter").classList.add("hidden");
-  $("#blame-legend").classList.add("hidden");
-  $("#note-editor").classList.add("hidden");
-  $("#note-preview").classList.remove("hidden");
-  $("#note-preview").innerHTML =
-    '<p class="muted">Folder <b>' + escapeHtml(path) + '</b>. Its README is shown on the left; '
-    + 'add one with <b>+ Note</b> named <code>README</code>.</p>';
-
-  const readme = (await api("/api/projects/" + PID + "/readme?folder="
-                            + encodeURIComponent(path))).note;
-  showCompiled(path, readme
-    ? readme.content
-    : "*No README in this folder yet.*");
-}
-
-async function selectedStandalone(nid) {
-  S.pages = [];
-  $("#note-tabs").classList.add("hidden");
-  await loadNote(nid);
-  // A standalone note has no document to show, so the viewer renders the note
-  // itself. That makes the editor a live preview and Ctrl+D pointless.
-  S.noteMode = "edit";
-  applyNoteMode();
-  showCompiled(S.note.name, S.note.content);
-}
 
 $("#btn-edit-tags").addEventListener("click", () => {
-  const src = S.sel && S.sel.kind === "source" ? S.rows.find(s => s.id === S.sel.id) : null;
+  const sel = LIB.sel;
+  const src = sel && sel.kind === "source" ? S.rows.find(s => s.id === sel.id) : null;
   if (!src) return;
   openTagsModal({
     source: src,
     readOnly: S.readOnly,
     // The unfolded tree rows show the same tags, so they redraw with the modal.
-    onSaved: () => TREE.render(),
+    onSaved: () => LIB.TREE.render(),
   });
 });
-
-/** Hide every viewer. Each of the three is exclusive, and the PDF one holds a
- *  worker and a pile of canvases, so leaving it costs more than a class. */
-function clearViewers() {
-  PDFView.destroy();
-  $("#res-frame").classList.add("hidden");
-  $("#res-frame").src = "about:blank";
-  $("#res-md").classList.add("hidden");
-  $("#res-empty").classList.add("hidden");
-}
-
-function showCompiled(title, markdown) {
-  $("#res-title").textContent = title || "Note";
-  $("#res-meta").classList.add("hidden");
-  clearViewers();
-  const md = $("#res-md");
-  md.innerHTML = renderMarkdown(markdown);
-  md.classList.remove("hidden");
-}
-
-async function loadResource(s) {
-  $("#res-title").textContent = s.title;
-  $("#res-meta").textContent = s.source_type;
-  $("#res-meta").classList.remove("hidden");
-  const md = $("#res-md"), empty = $("#res-empty");
-  clearViewers();
-  const src = "/api/source/" + s.id + "/content";
-  if (s.source_type === "md") {
-    try {
-      const res = await fetch(src);
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      md.innerHTML = renderMarkdown(await res.text());
-      md.classList.remove("hidden");
-    } catch (e) {
-      empty.textContent = "Could not load the markdown source: " + e.message;
-      empty.classList.remove("hidden");
-    }
-  } else if (isPdf(s)) {
-    await PDFView.open(src, $("#res-pdf"));
-  } else {
-    $("#res-frame").src = src;
-    $("#res-frame").classList.remove("hidden");
-  }
-}
-
 
 
 /* ---------- Note pages ---------- */
 
+/** The pages written on one source, as tabs above the editor. Returns the page
+ *  the library should open, if there is one. */
 async function loadPages(sid) {
   const d = await api("/api/projects/" + PID + "/sources/" + sid + "/notes");
   S.pages = d.notes;
   S.caps = d.capabilities || S.caps;
   S.colors = d.colors || S.colors;
   renderNoteTabs();
-  if (S.pages.length) {
-    await loadNote(S.pages[0].id);
-    renderNoteTabs();          // now that there is a current page to mark active
-  } else {
+  if (!S.pages.length) {
     S.note = null;
-    $("#note-editor").classList.add("hidden");
-    $("#note-preview").classList.remove("hidden");
     $("#note-preview").innerHTML =
       '<p class="muted">No note pages yet — create one with <b>+</b> above.</p>';
     $("#blame-gutter").classList.add("hidden");
+    return null;
   }
+  const note = await loadNote(S.pages[0].id);
+  renderNoteTabs();            // now that there is a current page to mark active
+  return note;
 }
 
 function renderNoteTabs() {
   const bar = $("#note-tabs");
-  if (S.sel && S.sel.kind !== "source") { bar.classList.add("hidden"); return; }
+  const sel = LIB.sel;
+  if (sel && sel.kind !== "source") { bar.classList.add("hidden"); return; }
   bar.classList.remove("hidden");
   bar.innerHTML = "";
   for (const p of S.pages) {
@@ -313,8 +251,8 @@ $("#note-tabs").addEventListener("click", async e => {
   if (tab.classList.contains("active") && e.target.closest(".note-tab-name")) {
     return startRename(tab);
   }
-  await flushNote();
-  await loadNote(tab.dataset.id);
+  await LIB.flushNote();
+  await LIB.adoptNote(await loadNote(tab.dataset.id));
   renderNoteTabs();
 });
 
@@ -376,12 +314,13 @@ async function deletePage(nid) {
   try {
     await api("/api/notes/" + nid, { method: "DELETE" });
     toast("Page deleted", "ok");
-    if (S.sel && S.sel.kind === "note" && S.sel.id === nid) {
-      TREE.sel = null;
-      resetSelection();
+    const sel = LIB.sel;
+    if (sel && sel.kind === "note" && sel.id === nid) {
+      LIB.TREE.sel = null;
+      await LIB.resetSelection();
       await refreshTree();
-    } else if (S.sel && S.sel.kind === "source") {
-      await loadPages(S.sel.id);
+    } else if (sel && sel.kind === "source") {
+      await LIB.adoptNote(await loadPages(sel.id));
     } else {
       await refreshTree();
     }
@@ -389,7 +328,9 @@ async function deletePage(nid) {
 }
 
 async function newPage() {
-  const src = S.rows.find(s => s.id === S.sel.id);
+  const sel = LIB.sel;
+  if (!sel || sel.kind !== "source") return;
+  const src = S.rows.find(s => s.id === sel.id);
   const name = await askModal({
     title: "New note page",
     label: "Page name",
@@ -401,13 +342,14 @@ async function newPage() {
   if (!name) return;
   try {
     const d = await api("/api/projects/" + PID + "/notes",
-      { method: "POST", body: { source_id: S.sel.id, name } });
-    await loadPages(S.sel.id);
-    await loadNote(d.note.id);
+      { method: "POST", body: { source_id: sel.id, name } });
+    await loadPages(sel.id);
+    await LIB.adoptNote(await loadNote(d.note.id));
     renderNoteTabs();
   } catch (e) { toast(e.message, "err"); }
 }
 
+/** Fetch one page into the editor. The library takes it from there. */
 async function loadNote(nid) {
   try {
     const d = await api("/api/notes/" + nid);
@@ -416,15 +358,11 @@ async function loadNote(nid) {
     S.colors = d.colors || S.colors;
     $("#note-editor").value = S.note.content;
     $("#note-editor").readOnly = !d.can_edit;
-    $("#note-save-state").textContent = "";
-    S.noteDirty = false;
-    applyNoteMode();
     renderBlameLegend(d.show_blame);
-    await ANCHORS.load();
-    return true;
+    return S.note;
   } catch (e) {
     toast("Failed to load the note: " + e.message, "err");
-    return false;
+    return null;
   }
 }
 
@@ -439,90 +377,9 @@ function renderBlameLegend(show) {
     + blameColor(S.colors, a) + '"></span>' + escapeHtml(a) + "</span>").join("");
 }
 
-function onNoteTyped() {
-  if (!S.note) return;
-  S.noteDirty = true;
-  $("#note-save-state").textContent = "unsaved…";
-  clearTimeout(S.saveTimer);
-  S.saveTimer = setTimeout(saveNote, 1200);
-  scheduleGutter();
-}
-
-async function flushNote() {
-  clearTimeout(S.saveTimer);
-  if (S.noteDirty) await saveNote();
-}
-
-async function saveNote() {
-  if (!S.note || !S.noteDirty) return;
-  const content = $("#note-editor").value;
-  const nid = S.note.id;
-  S.noteDirty = false;
-  try {
-    const d = await api("/api/notes/" + nid, {
-      method: "PUT",
-      body: { content, base_version: S.note.version },
-    });
-    if (S.note && S.note.id === nid) {
-      S.note = d.note;
-      renderBlameLegend(true);
-      renderGutter();
-      if (S.sel && S.sel.kind === "note") showCompiled(S.note.name, S.note.content);
-    }
-    // Writing into a page can change who holds a line in it, and that is what
-    // decides whether the tab offers a delete button.
-    const page = S.pages.find(x => x.id === nid);
-    if (page && String(page.authors) !== String(d.note.authors)) {
-      page.authors = d.note.authors;
-      renderNoteTabs();
-    }
-    $("#note-save-state").textContent = "saved";
-    // A sentence that is gone from the saved text takes its link with it.
-    await ANCHORS.pruneLost();
-  } catch (e) {
-    S.noteDirty = true;
-    $("#note-save-state").textContent = e.status === 403 ? "not allowed" : "save error";
-    if (e.status === 403) {
-      toast(e.message, "err", 7000);
-      // Put back what the server still holds so the editor cannot drift out of
-      // sync with a save that never landed.
-      await loadNote(nid);
-    } else if (e.status === 409) {
-      toast(e.message + " — reloading the page", "warn", 6000);
-      await loadNote(nid);
-    } else {
-      toast("Note save failed: " + e.message, "err");
-    }
-  }
-}
-
-function applyNoteMode() {
-  const standalone = S.sel && S.sel.kind === "note";
-  const edit = standalone || S.noteMode === "edit";
-  $("#note-editor").classList.toggle("hidden", !edit);
-  $("#note-preview").classList.toggle("hidden", edit);
-  $("#note-hint").textContent = standalone
-    ? "Live preview — the compiled note is shown on the left"
-    : "Ctrl+D toggles preview";
-  if (!edit) $("#note-preview").innerHTML = renderMarkdown($("#note-editor").value);
-  scheduleGutter();
-  ANCHORS.draw();     // links are drawn over the textarea, so preview hides them
-}
-
-$("#note-editor").addEventListener("input", onNoteTyped);
-$("#note-editor").addEventListener("blur", () => { if (S.noteDirty) saveNote(); });
+$("#note-editor").addEventListener("input", scheduleGutter);
 $("#note-editor").addEventListener("scroll", syncGutterScroll);
 window.addEventListener("resize", scheduleGutter);
-
-document.addEventListener("keydown", e => {
-  if (e.ctrlKey && e.key.toLowerCase() === "d") {
-    e.preventDefault();
-    // Standalone notes are already live-previewed in the viewer pane.
-    if (!S.note || (S.sel && S.sel.kind === "note")) return;
-    S.noteMode = S.noteMode === "edit" ? "preview" : "edit";
-    applyNoteMode();
-  }
-});
 
 
 /* ---------- Blame gutter ---------- */
@@ -600,78 +457,12 @@ function syncGutterScroll() {
 }
 
 
-/* ---------- Anchors: note sentences grounded in the document ---------- */
-
-/** The source whose document is in the viewer right now. */
-function currentSource() {
-  const sid = S.note ? S.note.source_id : (S.sel && S.sel.kind === "source" ? S.sel.id : "");
-  return sid ? S.rows.find(r => r.id === sid) || null : null;
-}
-
-/** What the viewer is showing, in the terms the anchoring module needs: our
- *  own PDF renderer, or a piece of HTML it can measure and draw over. */
-function docTarget() {
-  const s = currentSource();
-  if (!s) return null;
-  if (isPdf(s)) return { kind: "pdf" };
-  if (s.source_type === "md") {
-    const root = $("#res-md");
-    return root.classList.contains("hidden")
-      ? null : { kind: "html", root, scroller: root };
-  }
-  // An HTML source is served from our own origin, so its frame is reachable.
-  const frame = $("#res-frame");
-  if (frame.classList.contains("hidden")) return null;
-  try {
-    const d = frame.contentDocument;
-    if (d && d.body) {
-      return { kind: "html", root: d.body,
-               scroller: d.scrollingElement || d.documentElement,
-               win: frame.contentWindow };
-    }
-  } catch (_) { /* cross-origin: not linkable, and nothing we can do */ }
-  return null;
-}
-
-const ANCHORS = makeAnchors({
-  editor: () => $("#note-editor"),
-  mirror: () => $("#note-mirror"),
-  layer: () => $("#anchor-layer"),
-  wrap: () => $(".note-wrap"),
-  preview: () => $("#note-preview"),
-  docPane: () => $("#panel-res"),
-  docTarget,
-  projectId: () => PID,
-  noteId: () => (S.note ? S.note.id : ""),
-  sourceId: () => (S.note ? S.note.source_id : ""),
-  colors: () => S.colors,
-  canLink: () => !S.readOnly && S.canEdit !== false,
-  inPreview: () => $("#note-editor").classList.contains("hidden"),
-  ensureEditMode: async () => {
-    if (!$("#note-editor").classList.contains("hidden")) return;
-    S.noteMode = "edit";
-    applyNoteMode();
-  },
-  openNote: async nid => {
-    await flushNote();
-    const ok = await loadNote(nid);
-    renderNoteTabs();
-    return ok;
-  },
-  onChange: ({ lost }) => {
-    const el = $("#note-anchor-state");
-    el.textContent = lost
-      ? lost + (lost === 1 ? " link no longer resolves" : " links no longer resolve")
-      : "";
-  },
-});
-
-
 /* ---------- Import & sources ---------- */
 
 $("#btn-import").addEventListener("click", () => {
   $("#imp-url").value = ""; $("#imp-file").value = "";
-  $("#imp-folder").value = (S.sel && S.sel.kind === "folder") ? S.sel.id : "";
+  const sel = LIB.sel;
+  $("#imp-folder").value = (sel && sel.kind === "folder") ? sel.id : "";
   openModal("modal-import");
 });
 
@@ -692,7 +483,7 @@ $("#imp-submit").addEventListener("click", async () => {
     toast(d.already_here ? "Already in this project"
       : d.duplicate ? "Known source — linked without re-downloading" : "Imported", "ok");
     await refreshTree();
-    await selectSource(d.id);
+    await LIB.selectSource(d.id);
   } catch (e) {
     toast("Import failed: " + e.message, "err", 7000);
   } finally {
@@ -711,7 +502,8 @@ async function removeSource(sid) {
   })) return;
   try {
     await api("/api/projects/" + PID + "/sources/" + sid, { method: "DELETE" });
-    if (S.sel && S.sel.kind === "source" && S.sel.id === sid) TREE.sel = null;
+    const sel = LIB.sel;
+    if (sel && sel.kind === "source" && sel.id === sid) LIB.TREE.sel = null;
     await refreshTree();
     toast("Removed from project", "ok");
   } catch (e) { toast(e.message, "err"); }
@@ -759,18 +551,19 @@ $("#btn-send").addEventListener("click", async () => {
 });
 
 $("#btn-import-notes").addEventListener("click", async () => {
-  if (!S.sel || S.sel.kind !== "source") {
+  const sel = LIB.sel;
+  if (!sel || sel.kind !== "source") {
     toast("Select a source first", "warn"); return;
   }
   const list = $("#import-notes-list");
   list.innerHTML = '<p class="muted">Looking…</p>';
   openModal("modal-import-notes");
   try {
-    const where = (await api("/api/transfer/elsewhere/" + S.sel.id)).projects;
+    const where = (await api("/api/transfer/elsewhere/" + sel.id)).projects;
     const rows = [];
     for (const p of where.filter(x => x.project_id !== PID && x.member)) {
       const pages = (await api("/api/projects/" + p.project_id
-        + "/sources/" + S.sel.id + "/notes")).notes;
+        + "/sources/" + sel.id + "/notes")).notes;
       for (const pg of pages) {
         rows.push('<button class="check-row target" data-note="' + pg.id + '">'
           + escapeHtml(p.name) + " · " + escapeHtml(pg.name || "Notes")
@@ -791,7 +584,7 @@ $("#btn-import-notes").addEventListener("click", async () => {
         { method: "POST", body: { note_id: b.dataset.note, to: PID } });
       closeModal("modal-import-notes");
       toast("Page imported", "ok");
-      await loadPages(S.sel.id);
+      await LIB.adoptNote(await loadPages(sel.id));
     } catch (e) { toast(e.message, "err", 6000); }
   };
 });
@@ -1060,51 +853,6 @@ $("#add-src-submit").addEventListener("click", async () => {
 });
 
 
-/* ---------- Splitters ---------- */
-
-function setupSplitter(handle, leftPanel, storageKey, min, max) {
-  const saved = parseFloat(localStorage.getItem(storageKey));
-  if (saved) leftPanel.style.flex = "0 0 " + (saved * 100).toFixed(2) + "%";
-  handle.addEventListener("mousedown", function (e) {
-    e.preventDefault();
-    document.body.classList.add("resizing");
-    const onMove = function (ev) {
-      const rect = $("#tab-library").getBoundingClientRect();
-      let f = (ev.clientX - rect.left) / rect.width;
-      f = Math.max(min, Math.min(max, f));
-      leftPanel.style.flex = "0 0 " + (f * 100).toFixed(2) + "%";
-      localStorage.setItem(storageKey, String(f));
-    };
-    const onUp = function () {
-      document.body.classList.remove("resizing");
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      scheduleGutter();
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  });
-}
-
-function setupSplitters() {
-  setupSplitter($('.splitter[data-split="dir"]'), $("#panel-dir"), "kndb.w.prj.dir", 0.14, 0.72);
-  setupSplitter($('.splitter[data-split="res"]'), $("#panel-res"), "kndb.w.prj.res", 0.2, 0.8);
-}
-
-
-/* ---------- Search ---------- */
-
-let _searchTimer;
-$("#search").addEventListener("input", function () {
-  clearTimeout(_searchTimer);
-  // "@ml" matches tags only, anything else the name or a tag — see
-  // tree.js:queryPredicate, which both pages filter through.
-  _searchTimer = setTimeout(() => {
-    TREE.applyFilter(TREE.queryPredicate($("#search").value));
-  }, 200);
-});
-
-
 /* ---------- Init ---------- */
 
 document.addEventListener("click", e => {
@@ -1114,6 +862,5 @@ document.addEventListener("click", e => {
 $$(".modal").forEach(m => m.addEventListener("mousedown", e => {
   if (e.target === m) m.classList.add("hidden");
 }));
-window.addEventListener("beforeunload", () => { if (S.noteDirty) saveNote(); });
 
 loadProject();
