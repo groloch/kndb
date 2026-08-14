@@ -19,11 +19,6 @@ const KNDB = (window.KNDB = {
   grants: {},        // action -> the roles allowed to do it
 });
 
-/* Whether role covers action.
-* The server enforces the same table.
-* This only decides what to draw, since a button that always 403s is worse
-* than none
-*/
 KNDB.may = (role, action) => (KNDB.grants[action] || []).includes(role);
 
 (function patchFetch() {
@@ -88,7 +83,6 @@ function toast(msg, kind = "info", ms = 4200) {
   _toastTimer = setTimeout(() => { t.className = "toast"; }, ms);
 }
 
-// Accepts "modal-x" or "#modal-x" — both spellings exist across the two pages.
 function modalEl(id) { return $(id.startsWith("#") ? id : `#${id}`); }
 function openModal(id) { modalEl(id).classList.remove("hidden"); }
 function closeModal(id) { modalEl(id).classList.add("hidden"); }
@@ -265,9 +259,6 @@ function typePill(stype) {
     + escapeHtml(stype) + "</span>";
 }
 
-/* PDFs go to our own renderer rather than the browser's: a passage has to be
- * selectable for a note to point at it
- */
 function isPdf(s) { return !!s && s.source_type === "pdf"; }
 
 /* Both ends of an anchor are quotes, not positions: a note sentence keeps its
