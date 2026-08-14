@@ -1,3 +1,8 @@
+"""Anchors: a sentence of a note page tied to a passage of a source.
+An anchor is a row of its own — the note text is never marked up, so a page
+reads the same whether or not anything is anchored to it
+"""
+
 import json
 import secrets
 import time
@@ -21,6 +26,8 @@ MAX_DOC_LOC = config.ANCHOR_DOC_LOC_CHARS
 
 
 class BadLocator(ValueError):
+    """A locator that is not an object, quotes nothing, or is over its limit
+    """
     pass
 
 
@@ -31,6 +38,8 @@ def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 def _loads(s, default):
+    """Parsed JSON, the default when the column is empty or corrupt
+    """
     if not s:
         return default
     try:
@@ -39,6 +48,8 @@ def _loads(s, default):
         return default
 
 def _to_dict(a: NoteAnchor) -> dict:
+    """Row as a dict, both locators parsed back into objects
+    """
     return {
         "id": a.id,
         "project_id": a.project_id,
@@ -51,12 +62,17 @@ def _to_dict(a: NoteAnchor) -> dict:
     }
 
 def clean_note_loc(raw) -> str:
-    """The note end always quotes text: there is nothing else to point at."""
+    """The note locator, validated, as the JSON blob to store.
+    The note end always quotes text: there is nothing else to point at
+    """
     return _clean(raw, "note_loc", quote=True, limit=MAX_LOC)
 
 def clean_doc_loc(raw) -> str:
-    """The document end quotes text too, except on a scanned page, where a
-    dragged rectangle is all there is to record."""
+    """The document locator, validated, as the JSON blob to store.
+    The document end quotes text too, except on a scanned page, where a
+    dragged rectangle is all there is to record — such a region locator is
+    rejected when it carries no rects
+    """
     loc = raw if isinstance(raw, dict) else None
     kind = (loc or {}).get("kind") or "text"
     if kind == "region":
@@ -66,6 +82,10 @@ def clean_doc_loc(raw) -> str:
     return _clean(raw, "doc_loc", quote=True, limit=MAX_DOC_LOC)
 
 def _clean(raw, field: str, *, quote: bool, limit: int) -> str:
+    """The locator as a compact JSON string, or BadLocator.
+    Rejects anything that is not an object, a quote-less one when quote is
+    set, and anything past limit characters once serialised
+    """
     if not isinstance(raw, dict):
         raise BadLocator(f"{field} must be an object")
     if quote and not str(raw.get("exact") or "").strip():
@@ -76,6 +96,8 @@ def _clean(raw, field: str, *, quote: bool, limit: int) -> str:
     return blob
 
 async def get(aid: str) -> dict | None:
+    """The anchor, None when the id is unknown
+    """
     async with db.session() as s:
         a = (await s.execute(
             select(NoteAnchor).where(NoteAnchor.id == aid))).scalar_one_or_none()
@@ -83,6 +105,10 @@ async def get(aid: str) -> dict | None:
 
 async def create(pid: str, note_id: str, source_id: str, *, author: str,
                  note_loc, doc_loc) -> dict:
+    """Records one link, returns it in public shape.
+    Both locators are cleaned as the row is built, so a BadLocator leaves
+    nothing written
+    """
     now = _ts()
     a = NoteAnchor(
         id=make_id(), project_id=pid, note_id=note_id, source_id=source_id,
@@ -95,6 +121,8 @@ async def create(pid: str, note_id: str, source_id: str, *, author: str,
     return _to_dict(a)
 
 async def list_for_note(nid: str) -> list:
+    """Every anchor of one note page, oldest first, [] when it has none
+    """
     async with db.session() as s:
         rows = (await s.execute(
             select(NoteAnchor).where(NoteAnchor.note_id == nid)
@@ -102,8 +130,11 @@ async def list_for_note(nid: str) -> list:
     return [_to_dict(a) for a in rows]
 
 async def list_for_source(pid: str, source_id: str) -> list:
-    """Every anchor drawn over one document by anyone in the project — what the
-    reader overlay needs to show a teammate's passage alongside your own."""
+    """Every anchor drawn over one document by anyone in the project, oldest
+    first.
+    What the reader overlay needs to show a teammate's passage alongside your
+    own
+    """
     async with db.session() as s:
         rows = (await s.execute(
             select(NoteAnchor).where(NoteAnchor.project_id == pid,
@@ -112,6 +143,8 @@ async def list_for_source(pid: str, source_id: str) -> list:
     return [_to_dict(a) for a in rows]
 
 async def remove(aid: str) -> bool:
+    """Deletes one anchor, False when the id is unknown
+    """
     async with db.session() as s:
         a = (await s.execute(
             select(NoteAnchor).where(NoteAnchor.id == aid))).scalar_one_or_none()
@@ -134,9 +167,10 @@ async def delete_for_notes(nids: list) -> None:
         await s.commit()
 
 async def delete_for_project_source(pid: str | None, source_id: str) -> None:
-    """A document leaving a project takes the anchors drawn on it along. Not
-    the same sweep as dropping that source's note pages: a standalone page can
-    quote a document it is not attached to, and those anchors die here too.
+    """A document leaving a project takes the anchors drawn on it along, pid
+    None meaning every project at once.
+    Not the same sweep as dropping that source's note pages: a standalone page
+    can quote a document it is not attached to, and those anchors die here too
     """
     stmt = delete(NoteAnchor).where(NoteAnchor.source_id == source_id)
     if pid is not None:
@@ -151,13 +185,11 @@ async def delete_for_project(pid: str) -> None:
         await s.commit()
 
 async def copy_to_note(src_nid: str, dst_nid: str, dst_pid: str) -> int:
-    """Carry a page's anchors along when the page is copied into another
-    project. Nothing is rewritten but the ids: `source_id` is global, and both
-    locators are quotes, so they resolve against the copy — including when the
-    copy was appended under a provenance header and every offset moved.
-
-    Authorship is preserved: a copied observation is still the observation of
-    whoever made it, the same way copied note text keeps its blame.
+    """Carries a page's anchors onto its copy, returns how many followed.
+    Nothing is rewritten but the ids: source_id is global, and both locators
+    are quotes, so they resolve against the copy — including when it was
+    appended under a provenance header and every offset moved.
+    Authorship is preserved, the way copied note text keeps its blame
     """
     rows = await list_for_note(src_nid)
     if not rows:

@@ -1,3 +1,9 @@
+"""Fetching a URL into a source blob: arXiv papers, Hugging Face, plain web.
+Every fetcher is network-bound and raises on failure, which the import route
+turns into a 502.
+The process shares one httpx client, closed by aclose() at shutdown
+"""
+
 import asyncio
 import base64
 import re
@@ -47,6 +53,9 @@ _CLIENT: httpx.AsyncClient | None = None
 
 
 def _http() -> httpx.AsyncClient:
+    """Process-wide client, built on first use.
+    Its timeouts are only a fallback — _http_get always passes its own
+    """
     global _CLIENT
     if _CLIENT is None:
         _CLIENT = httpx.AsyncClient(
@@ -56,16 +65,24 @@ def _http() -> httpx.AsyncClient:
     return _CLIENT
 
 async def aclose() -> None:
+    """Drops the shared client, so the next fetch builds a fresh one
+    """
     global _CLIENT
     if _CLIENT is not None:
         await _CLIENT.aclose()
         _CLIENT = None
 
 async def _http_get(url: str, timeout: float = 60.0, **kw) -> httpx.Response:
+    """GET through the shared client, timeout in seconds for the whole call.
+    It overrides the client's, so a slow document needs its own.
+    Redirects are not followed unless the caller asks
+    """
     kw.setdefault("timeout", timeout)
     return await _http().get(url, **kw)
 
 def classify_url(url: str) -> str:
+    """Which fetcher a URL wants: "arxiv", "huggingface" or "web"
+    """
     if ARXIV_RE.search(url or ""):
         return "arxiv"
     host = (urlparse(url).hostname or "").lower()
@@ -75,13 +92,12 @@ def classify_url(url: str) -> str:
     return "web"
 
 async def fetch_by_kind(kind: str, url: str) -> dict:
-    """Dispatch. Every fetch returns::
-
-        {"source_type", "content" (str|bytes), "title", "url"}
-
-    plus an optional ``"text"`` — a clean plain-text rendition of the same
-    document, cached alongside the blob and preferred over parsing the blob
-    when the LLM needs the document as text.
+    """Dispatch on the kind classify_url returned.
+    Every fetcher gives back {"source_type", "content" (str|bytes), "title",
+    "url"}, plus an optional "text" — a clean plain-text rendition of the same
+    document, cached beside the blob and preferred over parsing the blob when
+    the LLM needs the document as text.
+    Raises on failure, never a partial source
     """
     if kind == "arxiv":
         return await fetch_arxiv(url)
@@ -90,9 +106,13 @@ async def fetch_by_kind(kind: str, url: str) -> dict:
     return await fetch_web(url)
 
 async def fetch_arxiv(url: str) -> dict:
-    """The PDF stays the stored blob — it is what the user reads. The HTML
-    rendition rides along as ``text`` because LaTeX-derived markup extracts far
-    more cleanly than anything we can recover from the PDF."""
+    """arXiv paper: the PDF becomes the stored blob, its HTML rendition the
+    "text" alongside.
+    The PDF is what the user reads, but LaTeX-derived markup extracts far more
+    cleanly than anything recoverable from the PDF.
+    Raises ValueError when the URL carries no arXiv id, or when the PDF
+    download fails — title and "text" are best effort
+    """
     m = ARXIV_RE.search(url)
     if not m:
         raise ValueError("not a valid arXiv URL")
@@ -112,14 +132,20 @@ async def fetch_arxiv(url: str) -> dict:
     return meta
 
 async def _arxiv_pdf(aid: str) -> bytes:
+    """The paper's PDF bytes, on a 120s budget.
+    Raises ValueError on anything but a 2xx, redirects included — they are not
+    followed
+    """
     r = await _http_get(f"https://arxiv.org/pdf/{aid}", timeout=120.0)
     if r.status_code >= 300:
         raise ValueError(f"arXiv PDF download failed with HTTP {r.status_code}")
     return r.content
 
 async def _arxiv_api_meta(aid: str) -> dict:
-    """The title from the arXiv API. Best effort — the import still works off
-    the bare ID when this is unavailable."""
+    """Title from the arXiv API, {} when anything goes wrong.
+    Best effort on purpose: the import still works off the bare id, so no
+    network or parse failure here can sink it
+    """
     out = {}
     try:
         r = await _http_get(f"https://export.arxiv.org/api/query?id_list={aid}",
@@ -139,9 +165,12 @@ async def _arxiv_api_meta(aid: str) -> dict:
     return out
 
 async def _arxiv_html_text(aid: str) -> str:
-    """Clean text from arXiv's HTML rendition, or ``""`` when there is none —
-    PDF-only submissions have no LaTeX source to render, and the caller then
-    falls back to extracting text from the PDF."""
+    """Clean text from arXiv's HTML rendition, "" when there is none.
+    Tries arxiv.org then ar5iv, and reads a result shorter than MIN_HTML_TEXT
+    as an error page rather than a paper.
+    Never raises — PDF-only submissions have no LaTeX source to render, and
+    the caller falls back to extracting text from the PDF
+    """
     for template in ARXIV_HTML_URLS:
         try:
             r = await _http_get(template.format(aid=aid), timeout=90.0,
@@ -156,8 +185,11 @@ async def _arxiv_html_text(aid: str) -> str:
     return ""
 
 def latexml_text(html: bytes | str) -> str:
-    """Flatten a LaTeXML-generated paper into plain text: page chrome dropped,
-    math restored to its LaTeX source, one block element per line."""
+    """Flattens a LaTeXML-generated paper into plain text.
+    Page chrome dropped, math restored to its LaTeX source, one block element
+    per line.
+    "" when the document has no article body — parsing itself never raises
+    """
     soup = BeautifulSoup(html, "html.parser")
     root = soup.find("article") or soup.find(class_="ltx_page_main") or soup.body
     if root is None:
@@ -177,6 +209,12 @@ def latexml_text(html: bytes | str) -> str:
     return re.sub(r"\n{3,}", "\n\n", re.sub(r" ?\n ?", "\n", text)).strip()
 
 async def fetch_huggingface(url: str) -> dict:
+    """Hugging Face URL: paper pages defer to arXiv, repos yield their README.
+    A paper page is only a viewer around the arXiv paper, so the paper itself
+    is imported instead.
+    Anything else, and any README that will not load, falls through to
+    fetch_web
+    """
     path = (urlparse(url).path or "").strip("/")
     paper = HF_PAPER_RE.match(path)
     if paper:  # a paper page is a viewer around arXiv — import the paper itself
@@ -199,6 +237,9 @@ async def fetch_huggingface(url: str) -> dict:
     return await fetch_web(url)
 
 def _page_title(soup: BeautifulSoup, url: str) -> str:
+    """Title of a fetched page: its <title>, else the last path segment, else
+    the host
+    """
     if soup.title and soup.title.string and soup.title.string.strip():
         return soup.title.string.strip()[:200]
     path = urlparse(url).path.strip("/")
@@ -207,12 +248,19 @@ def _page_title(soup: BeautifulSoup, url: str) -> str:
     return urlparse(url).hostname or "untitled"
 
 def _url_title(url: str) -> str:
+    """Title guessed from the URL alone, for documents that carry none
+    """
     path = urlparse(url).path.strip("/")
     seg = path.rsplit("/", 1)[-1] if path else urlparse(url).hostname or "untitled"
     return (seg.replace("_", " ").replace("-", " ").replace(".pdf", "").strip()
             .title()[:200] or "untitled")
 
 async def _inline_css(soup: BeautifulSoup, base_url: str) -> None:
+    """Inlines every stylesheet into the soup, so the stored page renders
+    offline.
+    Fetched concurrently, 20s each — a link that fails, or is not CSS, is
+    dropped rather than left pointing at the network
+    """
     targets = []
     for link in list(soup.find_all("link")):
         rel = [str(x).lower() for x in (link.get("rel") or [])]
@@ -239,6 +287,10 @@ async def _inline_css(soup: BeautifulSoup, base_url: str) -> None:
     await asyncio.gather(*(one(l, u) for l, u in targets))
 
 async def _embed_images(soup: BeautifulSoup, base_url: str) -> None:
+    """Rewrites every <img> to a data: URI, for the same reason.
+    IMG_LIMIT downloads at a time, 20s and MAX_IMAGE bytes each.
+    Whatever fails, or comes back not an image, loses its tag
+    """
     targets = []
     for img in soup.find_all("img"):
         src = img.get("src") or img.get("data-src")
@@ -267,6 +319,9 @@ async def _embed_images(soup: BeautifulSoup, base_url: str) -> None:
     await asyncio.gather(*(one(img, u) for img, u in targets))
 
 def _naive_md(soup: BeautifulSoup, url: str, title: str) -> str:
+    """Last-resort markdown: the page text, then every outbound link.
+    Used when the LLM rewrite is unavailable, or no better than the raw text
+    """
     lines = [f"# {title}", "", soup.get_text("\n", strip=True), "", "## Links"]
     seen = set()
     for a in soup.find_all("a", href=True):
@@ -283,6 +338,12 @@ def _naive_md(soup: BeautifulSoup, url: str, title: str) -> str:
     return "\n".join(lines)
 
 async def fetch_web(url: str) -> dict:
+    """Any other URL: HTML with its CSS and images inlined, else the raw body.
+    Raises ValueError on anything but a 2xx, redirects included.
+    A page whose text is thinner than MIN_PAGE_CHARS is likely rendered by
+    JavaScript, so the LLM is asked for markdown, with _naive_md behind it
+    when that fails or gains nothing
+    """
     r = await _http_get(url)
     if r.status_code >= 300:
         raise ValueError(f"GET {url} -> HTTP {r.status_code}")

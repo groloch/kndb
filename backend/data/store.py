@@ -1,3 +1,8 @@
+"""The source library: a metadata row per source, plus its blob on disk.
+Row and file are written in separate steps, so nothing here is atomic — a
+crash between the two leaves an empty file or a row pointing at one
+"""
+
 import os
 import re
 import secrets
@@ -27,16 +32,19 @@ def make_id() -> str:
 
 def text_sidecar(source_path: str) -> str:
     """Path of the cached plain-text rendition sitting next to a source blob.
-
-    Optional: present only when the fetcher had a cleaner text rendition than
-    the blob itself (arXiv HTML next to the PDF). No extension in
-    :data:`TYPE_EXT` is ``.txt``, so this never collides with a real source."""
+    Present only when the fetcher had a cleaner text rendition than the blob
+    itself, as arXiv HTML next to the PDF.
+    No extension in TYPE_EXT is .txt, so this never collides with a real source
+    """
     return os.path.splitext(source_path)[0] + ".txt"
 
 def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 def _row_to_dict(src: Source) -> dict:
+    """Row as a dict, source_path made absolute.
+    The column itself is relative to DATA_DIR, so the library can move
+    """
     return {
         "id": src.id,
         "title": src.title,
@@ -48,6 +56,10 @@ def _row_to_dict(src: Source) -> dict:
     }
 
 def to_public(row: dict, stats: dict | None = None) -> dict:
+    """The shape the API hands out: metadata, minus the path on disk.
+    Quiz counts are per project, so without stats they read zero and
+    date_added falls back to the fetch time
+    """
     st = stats or {}
     return {
         "id": row["id"], "title": row["title"], "source_type": row["source_type"],
@@ -58,6 +70,9 @@ def to_public(row: dict, stats: dict | None = None) -> dict:
     }
 
 def _matches(row: dict, tags: list, terms: list) -> bool:
+    """Whether a row carries every tag and every term, case-insensitively.
+    Tags match whole, terms match anywhere in the title
+    """
     rtags = {t.strip().lower() for t in (row.get("tags") or "").split(",") if t.strip()}
     if tags and not all(t in rtags for t in tags):
         return False
@@ -65,6 +80,9 @@ def _matches(row: dict, tags: list, terms: list) -> bool:
     return all(t.lower() in title for t in terms)
 
 def _parse_query(q: str):
+    """Splits the search box into (tags, title terms, project names).
+    @foo is a tag, /foo a project, anything else a term of the title
+    """
     q = (q or "").strip()
     if not q:
         return [], [], []
@@ -83,11 +101,16 @@ async def count_sources() -> int:
         return (await s.execute(select(func.count()).select_from(Source))).scalar_one()
 
 async def get_source(sid: str) -> dict | None:
+    """The source, None when the id is unknown
+    """
     async with db.session() as s:
         src = (await s.execute(select(Source).where(Source.id == sid))).scalar_one_or_none()
         return _row_to_dict(src) if src else None
 
 async def find_by_url(url: str) -> dict | None:
+    """The source imported from this URL, None when blank or never fetched.
+    The dedup probe before importing again
+    """
     if not url:
         return None
     async with db.session() as s:
@@ -95,6 +118,10 @@ async def find_by_url(url: str) -> dict | None:
         return _row_to_dict(src) if src else None
 
 async def list_sources(q: str = "", pid: str = "") -> list:
+    """Sources matching the query, in public shape, [] when none do.
+    A pid narrows the list to that project's sources, and only then do the rows
+    carry its quiz counts
+    """
     tags, terms, projs = _parse_query(q)
     async with db.session() as s:
         rows = [_row_to_dict(x) for x in (await s.execute(select(Source))).scalars().all()]
@@ -112,8 +139,10 @@ async def list_sources(q: str = "", pid: str = "") -> list:
 
 async def create_source(title: str, source_type: str, url: str = "",
                         tags: str = "") -> tuple:
-    """Create the DB row + empty source blob file. Returns ``(sid, abs_path)`` —
-    the caller then writes the actual source content into the path."""
+    """Creates the row and an empty blob file, returns (sid, abs_path).
+    Writing the actual content into that path is the caller's job.
+    Raises ValueError on a source type outside TYPE_EXT
+    """
     ensure_dirs()
     if source_type not in TYPE_EXT:
         raise ValueError(f"unknown source type: {source_type}")
@@ -133,6 +162,9 @@ async def create_source(title: str, source_type: str, url: str = "",
     return sid, abs_path
 
 async def update_meta(sid: str, title=None, tags=None) -> None:
+    """Renames or retags a source, a silent no-op when the id is unknown.
+    A field left None keeps what is stored
+    """
     async with db.session() as s:
         src = (await s.execute(select(Source).where(Source.id == sid))).scalar_one_or_none()
         if src is None:
@@ -144,6 +176,10 @@ async def update_meta(sid: str, title=None, tags=None) -> None:
         await s.commit()
 
 async def delete_source(sid: str) -> None:
+    """Drops the row, every project link, and both files on disk.
+    Silent when the id is unknown, and a file that refuses to unlink is left
+    behind rather than failing the delete
+    """
     row = await get_source(sid)
     async with db.session() as s:
         src = (await s.execute(select(Source).where(Source.id == sid))).scalar_one_or_none()

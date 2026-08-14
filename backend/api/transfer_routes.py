@@ -1,3 +1,9 @@
+"""Moving work between projects: a source, a whole page, or a few lines of one.
+Nothing is ever moved out of where it came from — the origin keeps its copy —
+and the text lands with its blame and a provenance header, so a reader can see
+whose words arrived and from where
+"""
+
 import time
 from typing import Optional
 
@@ -17,6 +23,10 @@ def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 def _provenance(project_name: str, page: dict, rle: list | None = None) -> str:
+    """The quoted line that tells the reader where the arriving text is from.
+    Names the three biggest contributors of the blame given, falling back to
+    the page's creator when nothing is attributed
+    """
     bits = [f"from **{project_name}**"]
     if (page.get("name") or "").strip():
         bits.append(f'page "{page["name"]}"')
@@ -28,6 +38,8 @@ def _provenance(project_name: str, page: dict, rle: list | None = None) -> str:
     return "> " + " · ".join(b for b in bits if b)
 
 def _authors_by_weight(rle: list | None) -> list:
+    """Authors of a blame run-length, the one who wrote the most lines first
+    """
     counts: dict = {}
     for run in rle or []:
         author = run.get("author") or ""
@@ -37,6 +49,11 @@ def _authors_by_weight(rle: list | None) -> list:
 
 async def _land(target_pid: str, source_id: str, *, user: str, text: str,
                 rle: list, header: str, name: str, origin: dict) -> dict:
+    """Where arriving text ends up, which the target project decides.
+    A project holding several pages per source takes it as a new page,
+    anywhere else it is appended to the single one. The source is linked into
+    the target first, so the copy has its document to point at
+    """
     caps = await projects.get_capabilities(target_pid)
 
     if source_id and not await projects.has_source(target_pid, source_id):
@@ -62,6 +79,10 @@ async def _land(target_pid: str, source_id: str, *, user: str, text: str,
 @router.post("/api/transfer/source")
 async def transfer_source(body: Optional[dict] = None,
                           user: str = Depends(current_user)):
+    """Links a source into another project, with its pages when asked.
+    Needs to read the origin and to write in the target. Already there is not
+    an error, it answers duplicate
+    """
     body = body or {}
     sid = (body.get("source_id") or "").strip()
     src_pid = (body.get("from") or "").strip()
@@ -85,6 +106,9 @@ async def transfer_source(body: Optional[dict] = None,
     return {"ok": True, "added": added, "duplicate": not added}
 
 async def _copy_page(nid: str, dst_pid: str, user: str) -> dict:
+    """The landed copy of a whole page, headed with where it came from.
+    Callers do the permission checks: this one asks for none
+    """
     page = await get_note_or_404(nid)
     origin_project = await get_project_or_404(page["project_id"])
     header = _provenance(origin_project["name"], page)
@@ -104,6 +128,10 @@ async def _copy_page(nid: str, dst_pid: str, user: str) -> dict:
 @router.post("/api/transfer/note")
 async def transfer_note(body: Optional[dict] = None,
                         user: str = Depends(current_user)):
+    """The copy a whole page makes in another project.
+    Needs to be a member where the page lives and a writer where it goes, and
+    refuses a project the page is already in
+    """
     body = body or {}
     nid = (body.get("note_id") or "").strip()
     dst_pid = (body.get("to") or "").strip()
@@ -121,6 +149,10 @@ async def transfer_note(body: Optional[dict] = None,
 @router.post("/api/transfer/snippet")
 async def transfer_snippet(body: Optional[dict] = None,
                            user: str = Depends(current_user)):
+    """The copy a few lines of a page make in another project.
+    Same permissions as a whole page. The snippet keeps the blame of the lines
+    it was cut from, and can be aimed at a different source than the page's own
+    """
     body = body or {}
     nid = (body.get("note_id") or "").strip()
     dst_pid = (body.get("to") or "").strip()
@@ -147,6 +179,10 @@ async def transfer_snippet(body: Optional[dict] = None,
     return {"ok": True, "note": landed}
 
 def _snippet_blame(page: dict, text: str) -> list:
+    """Blame of the snippet, found by matching its lines in the page.
+    Empty when the text is not in the page line for line, which leaves the
+    landing side to attribute it
+    """
     page_lines = blame.split_lines(page["content"])
     want = blame.split_lines(text)
     entries = blame.expand(page["blame"], len(page_lines))
@@ -157,6 +193,11 @@ def _snippet_blame(page: dict, text: str) -> list:
 
 @router.get("/api/transfer/targets")
 async def transfer_targets(user: str = Depends(current_user)):
+    """The caller's workspace and every team they belong to.
+    Membership only, so a transfer to one of them can still be refused for the
+    role. Each team reports multi_notes, which is what decides between a page
+    of its own and an append to an existing one
+    """
     personal = await projects.personal_project(user)
     teams = await projects.list_projects(user=user, kind="team")
     return {"ok": True, "personal": {"id": personal["id"], "name": personal["name"]},
@@ -166,6 +207,12 @@ async def transfer_targets(user: str = Depends(current_user)):
 
 @router.get("/api/transfer/elsewhere/{sid}")
 async def notes_elsewhere(sid: str, user: str = Depends(current_user)):
+    """Which teams have written about this document, and whether the caller is
+    in them.
+    Counts only, never the text, so it can be answered for a project the
+    caller cannot read. Personal workspaces are left out: somebody else's
+    reading is not on show
+    """
     await get_source_or_404(sid)
     mine = {p["id"] for p in await projects.list_projects(user=user, kind="")}
     out = []
@@ -181,6 +228,11 @@ async def notes_elsewhere(sid: str, user: str = Depends(current_user)):
     return {"ok": True, "projects": out}
 
 async def mirror_to_workspace(user: str, sid: str, source_pid: str) -> None:
+    """Links a source into the caller's own workspace as it is imported
+    somewhere else, and opens their page on it.
+    Only when they turned auto_import on, and never when the import was into
+    that workspace already
+    """
     personal = await projects.personal_project(user)
     if not personal["capabilities"]["auto_import"]:
         return

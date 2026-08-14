@@ -1,3 +1,10 @@
+"""Projects: their members, the sources linked into them, and the folder tree
+those sources and note pages live in.
+Every call here opens and commits its own session, so a cascade spanning
+several of them is not atomic — a failure halfway leaves the earlier steps
+committed
+"""
+
 import secrets
 import time
 
@@ -31,10 +38,15 @@ def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 def norm_folder(path: str) -> str:
+    """Canonical folder path: forward slashes, no empty, "." or ".." segment.
+    The root is "", never "/"
+    """
     parts = [p.strip() for p in (path or "").replace("\\", "/").split("/")]
     return "/".join(p for p in parts if p and p not in (".", ".."))[:1000]
 
 async def _counts(pid: str):
+    """How many members and how many sources, in that order
+    """
     async with db.session() as s:
         members = (await s.execute(
             select(func.count()).select_from(ProjectMember)
@@ -48,6 +60,8 @@ def _member_dict(m: ProjectMember) -> dict:
     return {"name": m.name, "role": m.role, "color": m.color or EXTERNAL_COLOR}
 
 def _project_dict(p: Project) -> dict:
+    """Project as a dict, both counts left at zero for the caller to fill in
+    """
     return {
         "id": p.id,
         "name": p.name,
@@ -62,6 +76,11 @@ def _project_dict(p: Project) -> dict:
     }
 
 async def list_projects(q: str = "", user: str = "", kind: str = "team") -> list:
+    """Projects matching the search, newest first, [] when none do.
+    A user narrows it to the ones they belong to, a kind to personal or team —
+    an empty kind spans both.
+    The term is looked for in the name and in the description
+    """
     term = (q or "").strip().lower()
     async with db.session() as s:
         stmt = select(Project)
@@ -86,6 +105,9 @@ async def list_projects(q: str = "", user: str = "", kind: str = "team") -> list
     return out
 
 async def get_project(pid: str) -> dict | None:
+    """One project with its members and the ids of its sources, None when the
+    id is unknown
+    """
     async with db.session() as s:
         p = (await s.execute(select(Project).where(Project.id == pid))).scalar_one_or_none()
         if p is None:
@@ -103,6 +125,8 @@ async def get_project(pid: str) -> dict | None:
     return d
 
 async def get_capabilities(pid: str) -> dict:
+    """The project's capability flags, the team defaults when it is unknown
+    """
     async with db.session() as s:
         p = (await s.execute(select(Project).where(Project.id == pid))).scalar_one_or_none()
     if p is None:
@@ -110,6 +134,10 @@ async def get_capabilities(pid: str) -> dict:
     return {k: bool(getattr(p, k)) for k in _CAP_KEYS}
 
 async def source_ids_for_project_terms(terms: list) -> set:
+    """Sources held by any team project whose name contains one of the terms.
+    An empty set when nothing matches, so a /project search that hits no
+    project finds no source rather than every one
+    """
     if not terms:
         return set()
     async with db.session() as s:
@@ -125,6 +153,10 @@ async def source_ids_for_project_terms(terms: list) -> set:
 
 async def create_project(name: str, description: str = "", owner: str = "",
                          kind: str = "team", **caps) -> dict:
+    """Creates a project with owner as its first member, returns it in full.
+    Capabilities start from the defaults of that kind, and a cap outside
+    CAP_KEYS is ignored rather than refused
+    """
     owner = owner or DEFAULT_USER
     settings = dict(PERSONAL_CAPS if kind == "personal" else TEAM_CAPS)
     settings.update({k: bool(v) for k, v in caps.items() if k in _CAP_KEYS})
@@ -140,6 +172,9 @@ async def create_project(name: str, description: str = "", owner: str = "",
     return await get_project(pid)
 
 async def personal_project(user: str) -> dict:
+    """The user's own workspace, created the first time it is asked for.
+    Exactly one per user, and an empty name lands on the default one
+    """
     user = user or DEFAULT_USER
     async with db.session() as s:
         p = (await s.execute(
@@ -155,6 +190,9 @@ async def personal_project_id(user: str) -> str:
 
 async def update_project(pid: str, name=None, description=None,
                          completed=None, **caps) -> dict | None:
+    """Updates the fields that are not None, None when the id is unknown.
+    Returns the project in full, as get_project would
+    """
     async with db.session() as s:
         p = (await s.execute(select(Project).where(Project.id == pid))).scalar_one_or_none()
         if p is None:
@@ -172,6 +210,11 @@ async def update_project(pid: str, name=None, description=None,
     return await get_project(pid)
 
 async def delete_project(pid: str) -> None:
+    """Deletes a project with its members, source links, folders, quizzes and
+    note pages.
+    The sources themselves stay: they belong to the library, not to a project.
+    Raises ValueError on a personal workspace, which cannot be deleted
+    """
     async with db.session() as s:
         p = (await s.execute(select(Project).where(Project.id == pid))).scalar_one_or_none()
         if p and (p.kind or "team") == "personal":
@@ -187,6 +230,8 @@ async def delete_project(pid: str) -> None:
     await notes.delete_for_project(pid)
 
 async def list_members(pid: str) -> list:
+    """The project's members, in the order they were added
+    """
     async with db.session() as s:
         ms = (await s.execute(
             select(ProjectMember).where(ProjectMember.project_id == pid)
@@ -194,6 +239,8 @@ async def list_members(pid: str) -> list:
     return [_member_dict(m) for m in ms]
 
 async def member_role(pid: str, user: str) -> str | None:
+    """The user's role in the project, None when they are not a member
+    """
     async with db.session() as s:
         m = (await s.execute(
             select(ProjectMember).where(ProjectMember.project_id == pid,
@@ -205,12 +252,18 @@ async def color_map(pid: str) -> dict:
     return {m["name"]: m["color"] for m in await list_members(pid)}
 
 def _pick_color(taken: set) -> str:
+    """First free color of the palette, wrapping round once it runs out
+    """
     for c in PALETTE:
         if c not in taken:
             return c
     return PALETTE[len(taken) % len(PALETTE)]
 
 async def add_member(pid: str, name: str, role: str = DEFAULT_ROLE) -> dict | None:
+    """Adds a member and picks their blame color, None when already in.
+    A role outside ROLES quietly becomes the default one, and a blank name
+    raises ValueError
+    """
     role = role if role in ROLES else DEFAULT_ROLE
     name = name.strip()[:120]
     if not name:
@@ -231,6 +284,9 @@ async def add_member(pid: str, name: str, role: str = DEFAULT_ROLE) -> dict | No
     return {"name": name, "role": role, "color": color}
 
 async def remove_member(pid: str, name: str) -> bool:
+    """Removes a member, False when they were not one.
+    Raises ValueError rather than leave a project with no owner at all
+    """
     async with db.session() as s:
         m = (await s.execute(
             select(ProjectMember).where(ProjectMember.project_id == pid,
@@ -250,6 +306,10 @@ async def remove_member(pid: str, name: str) -> bool:
     return True
 
 async def set_member_role(pid: str, name: str, role: str) -> bool:
+    """Changes a member's role, False when they are not one.
+    A role outside ROLES quietly becomes the default one, and demoting the
+    last owner raises ValueError
+    """
     role = role if role in ROLES else DEFAULT_ROLE
     async with db.session() as s:
         m = (await s.execute(
@@ -271,6 +331,9 @@ async def set_member_role(pid: str, name: str, role: str) -> bool:
 
 async def add_source(pid: str, source_id: str, folder: str = "",
                      added_by: str = "") -> bool:
+    """Links a source into the project, False when it is already linked.
+    The source row itself is not touched, only the link
+    """
     async with db.session() as s:
         exists = (await s.execute(
             select(ProjectSource).where(ProjectSource.project_id == pid,
@@ -292,6 +355,10 @@ async def has_source(pid: str, source_id: str) -> bool:
         )).scalar_one_or_none() is not None
 
 async def remove_source(pid: str, source_id: str) -> bool:
+    """Unlinks a source, taking its quiz, its note pages and their anchors.
+    False when it was not linked here.
+    The source stays in the library, and in whatever other project holds it
+    """
     async with db.session() as s:
         link = (await s.execute(
             select(ProjectSource).where(ProjectSource.project_id == pid,
@@ -309,7 +376,10 @@ async def remove_source(pid: str, source_id: str) -> bool:
     return True
 
 async def remove_source_everywhere(source_id: str) -> None:
-    """Personal source deletion must also drop its project links."""
+    """The same sweep as remove_source, in every project at once.
+    What deleting a source from the library has to call, so no project is left
+    linked to a blob that is gone
+    """
     async with db.session() as s:
         await s.execute(delete(ProjectSource).where(ProjectSource.source_id == source_id))
         await s.execute(delete(SourceQuiz).where(SourceQuiz.source_id == source_id))
@@ -319,6 +389,10 @@ async def remove_source_everywhere(source_id: str) -> None:
     await anchors.delete_for_project_source(None, source_id)
 
 async def set_source_folder(pid: str, source_id: str, folder: str) -> bool:
+    """Files a linked source under a folder, False when it is not linked.
+    The folder is created if it does not exist yet, an empty one meaning the
+    root
+    """
     folder = norm_folder(folder)
     async with db.session() as s:
         link = (await s.execute(
@@ -334,6 +408,8 @@ async def set_source_folder(pid: str, source_id: str, folder: str) -> bool:
     return True
 
 async def source_links(pid: str) -> list:
+    """The project's source links, oldest first: id, folder, when and by whom
+    """
     async with db.session() as s:
         rows = (await s.execute(
             select(ProjectSource).where(ProjectSource.project_id == pid)
@@ -342,12 +418,18 @@ async def source_links(pid: str) -> list:
              "added_at": r.added_at, "added_by": r.added_by or ""} for r in rows]
 
 async def projects_holding_source(source_id: str) -> list:
+    """Ids of every project this source is linked into
+    """
     async with db.session() as s:
         return list((await s.execute(
             select(ProjectSource.project_id)
             .where(ProjectSource.source_id == source_id))).scalars().all())
 
 async def list_folders(pid: str) -> list:
+    """Every folder of the project, sorted, ancestors included.
+    A folder exists either as a row of its own or because a source sits in it,
+    and the root is not one of them
+    """
     async with db.session() as s:
         rows = set((await s.execute(
             select(ProjectFolder.path)
@@ -365,6 +447,10 @@ async def list_folders(pid: str) -> list:
     return sorted(out)
 
 async def create_folder(pid: str, path: str) -> str:
+    """Creates a folder and any ancestor it still lacks, returns its canonical
+    path.
+    Raises ValueError when the path normalises to nothing
+    """
     path = norm_folder(path)
     if not path:
         raise ValueError("folder path required")
@@ -382,6 +468,12 @@ async def create_folder(pid: str, path: str) -> str:
     return path
 
 async def rename_folder(pid: str, path: str, new_path: str) -> str:
+    """Moves a folder subtree, its sources and its note pages with it.
+    Returns the new canonical path, unchanged when both sides normalise the
+    same.
+    Raises ValueError on an empty path, or on a move into the folder's own
+    subtree
+    """
     path, new_path = norm_folder(path), norm_folder(new_path)
     if not path or not new_path:
         raise ValueError("folder path required")
@@ -391,6 +483,8 @@ async def rename_folder(pid: str, path: str, new_path: str) -> str:
         raise ValueError("cannot move a folder inside itself")
 
     def moved(p: str) -> str | None:
+        """Where p ends up, None when it is outside the subtree
+        """
         if p == path:
             return new_path
         if p.startswith(path + "/"):
@@ -415,12 +509,20 @@ async def rename_folder(pid: str, path: str, new_path: str) -> str:
     return new_path
 
 async def delete_folder(pid: str, path: str) -> None:
+    """Deletes a folder subtree, lifting what it held into its parent.
+    Only the folder rows go: the sources and note pages inside move up a
+    level, they are never deleted with it.
+    Raises ValueError when the path normalises to nothing
+    """
     path = norm_folder(path)
     if not path:
         raise ValueError("folder path required")
     parent = path.rsplit("/", 1)[0] if "/" in path else ""
 
     def lifted(p: str) -> str | None:
+        """Where p lands once the folder is gone, None when it is outside the
+        subtree
+        """
         if p == path:
             return parent
         if p.startswith(path + "/"):

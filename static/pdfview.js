@@ -2,26 +2,29 @@
 
 /* PDF renderer, replacing the browser's built-in reader.
  *
- * The built-in one is a black box: the page it shows is not scriptable from
- * here, so there is no way to read a selection out of it. Owning the render is
- * the only way to let a note sentence point at a passage — see plan-anchors.md.
+ * The built-in one is a black box: its page cannot be scripted from here, so a
+ * selection cannot be read out of it. Owning the render is what lets a note
+ * sentence point at a passage.
  *
- * Pages are laid out at their real size immediately (so the scrollbar is honest
- * from the first frame) but only painted while they are near the viewport.
+ * Pages are laid out at their real size immediately, so the scrollbar is honest
+ * from the first frame, but painted only while they are near the viewport.
  *
- * Exposes a single global, PDFView. The library itself is imported lazily, so
- * a workspace of markdown sources never pays for it. */
+ * Exposes a single global, PDFView. The library is imported lazily, so a
+ * workspace of markdown sources never pays for it
+ */
 
 const PDFView = (() => {
 
-  /** How far outside the viewport a page still gets painted, in viewport
-   *  heights. One screen of slack in each direction keeps scrolling smooth
-   *  without holding a whole book's worth of canvases. */
+  /* How far outside the viewport a page still gets painted, in viewport
+  * heights. One screen of slack in each direction keeps scrolling smooth
+  * without holding a whole book's worth of canvases
+  */
   const MARGIN = 1;
 
-  /** Above this, we stop asking the document for every page's dimensions up
-   *  front and assume page 1's size until each page is really rendered. Papers
-   *  never hit it; thousand-page scans would otherwise stall on open. */
+  /* Above this page count, the document is no longer asked for every page's
+  * dimensions up front, and page 1's size stands in until a page is really
+  * rendered. Papers never hit it. Thousand-page scans would stall on open
+  */
   const MEASURE_ALL_UNDER = 300;
 
   const ZOOMS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 2, 3, 4];
@@ -29,6 +32,8 @@ const PDFView = (() => {
   let lib = null;
 
   async function loadLib() {
+    /* Imports pdf.js once, and points it at its worker
+    */
     if (!lib) {
       lib = await import("/static/vendor/pdf.min.mjs");
       lib.GlobalWorkerOptions.workerSrc = "/static/vendor/pdf.worker.min.mjs";
@@ -51,10 +56,10 @@ const PDFView = (() => {
     current: 1,
   };
 
-  /* ---------- lifecycle ---------- */
-
-  /** Render `url` into `host`. Safe to call again to switch documents. */
   async function open(url, host) {
+    /* Renders url into host.
+    * Safe to call again to switch documents
+    */
     // Tear the previous document down *first*: destroy() invalidates the
     // in-flight token, so ours has to be taken after it, not before.
     destroy();
@@ -100,6 +105,9 @@ const PDFView = (() => {
   }
 
   function destroy() {
+    /* Tears the open document down and empties the host.
+    * Bumps the token, so work already in flight drops its result
+    */
     st.token++;
     if (st.io) { st.io.disconnect(); st.io = null; }
     if (st.ro) { st.ro.disconnect(); st.ro = null; }
@@ -128,14 +136,18 @@ const PDFView = (() => {
   }
 
   function fail(msg) {
+    /* Replaces the viewer with a message, when the document cannot be shown
+    */
     if (!st.host) return;
     st.host.innerHTML = '<div class="empty"></div>';
     st.host.firstChild.textContent = msg;
   }
 
-  /* ---------- layout ---------- */
-
   async function buildPages(token) {
+    /* One sized, unpainted placeholder per page.
+    * Gives up silently when token is no longer the current one, meaning
+    * another document was opened meanwhile
+    */
     const n = st.doc.numPages;
     // Page one is always needed: it sets the fit-width scale and, for long
     // documents, stands in for the size of every page we do not measure.
@@ -180,9 +192,10 @@ const PDFView = (() => {
     $bar("page").value = "1";
   }
 
-  /** Resolve the scale and size every placeholder. Called on open, on zoom and
-   *  when the pane is resized. */
   function relayout() {
+    /* Resolves the scale and sizes every placeholder.
+    * Called on open, on zoom, and when the pane is resized
+    */
     if (!st.pages.length) return;
     const avail = st.scroll.clientWidth - 28;         // page margins + scrollbar
     const fit = Math.max(0.1, avail / st.pages[0].w1);
@@ -203,6 +216,9 @@ const PDFView = (() => {
   }
 
   function observe() {
+    /* Paints pages as they near the viewport, releases them as they leave.
+    * Also refits the width on a resize, unless a zoom was chosen
+    */
     st.io = new IntersectionObserver(entries => {
       for (const e of entries) {
         const p = st.pages[Number(e.target.dataset.page) - 1];
@@ -218,6 +234,8 @@ const PDFView = (() => {
   }
 
   function paintVisible() {
+    /* Paints the pages on screen right now
+    */
     // IntersectionObserver only fires on change, so after a zoom we prime the
     // pages that are on screen right now ourselves.
     const top = st.scroll.scrollTop, h = st.scroll.clientHeight;
@@ -227,13 +245,15 @@ const PDFView = (() => {
     }
   }
 
-  /* ---------- painting ---------- */
-
   function cancel(p) {
+    /* Drops a page's render still in flight
+    */
     if (p.task) { try { p.task.cancel(); } catch (_) {} p.task = null; }
   }
 
   function release(p) {
+    /* Frees a page's canvas and text layer, back to a sized placeholder
+    */
     cancel(p);
     if (p.state === "blank") return;
     p.canvasWrap.innerHTML = "";
@@ -242,6 +262,10 @@ const PDFView = (() => {
   }
 
   async function paint(p) {
+    /* Paints a blank page, text layer first, then the canvas.
+    * Every await is followed by a staleness check, as a zoom, a release or
+    * another document can land mid-render
+    */
     if (p.state !== "blank") return;
     p.state = "painting";
     const token = st.token, scale = st.scale;
@@ -301,20 +325,20 @@ const PDFView = (() => {
     }
   }
 
-  /* ---------- anchors ---------- */
-
   /* The document end of a link. Rects are stored as fractions of the page, so
-   * a highlight is drawn correctly at any zoom and even on a page that has not
-   * been painted yet — no re-resolution needed just to show a link. */
+  * a highlight is drawn correctly at any zoom, and even on a page that has not
+  * been painted yet
+  */
 
   let anchors = [];
   let onAnchorClick = null;
   let hovered = null;   // id of the passage under the pointer
 
-  /** One page's text as a single string, plus where each text node starts in
-   *  it. This is the coordinate system every document locator is written in,
-   *  so capturing and resolving cannot disagree about offsets. */
   function pageText(p) {
+    /* One page's text as a single string, plus where each text node starts in
+    * it. The coordinate system every document locator is written in, so
+    * capturing and resolving cannot disagree about offsets
+    */
     const nodes = [];
     let text = "", prevTop = null;
     const walk = document.createTreeWalker(p.textDiv, NodeFilter.SHOW_TEXT);
@@ -333,6 +357,9 @@ const PDFView = (() => {
   }
 
   function offsetOf(map, node, offset) {
+    /* Where a point of the text layer falls in the page text, null when the
+    * node is not one of the mapped ones
+    */
     for (const e of map.nodes) {
       if (e.node === node) return e.start + offset;
     }
@@ -340,20 +367,26 @@ const PDFView = (() => {
   }
 
   function pageOf(node) {
+    /* Page element a node sits in, null outside the pages
+    */
     const el = node && (node.nodeType === 1 ? node : node.parentElement);
     return el ? el.closest(".pdf-page") : null;
   }
 
   function normRects(rects, box) {
+    /* Client rects merged line by line, as fractions of the page box
+    */
     return mergeRowRects([...rects])
       .map(r => [(r.left - box.left) / box.width, (r.top - box.top) / box.height,
                  r.width / box.width, r.height / box.height]
         .map(v => Number(v.toFixed(5))));
   }
 
-  /** Turn what the user just selected into a document locator, or null if the
-   *  selection is empty or straddles two pages. */
   function captureSelection() {
+    /* Locator of the current document selection, null if none.
+    * Also null when the selection straddles two pages, or falls outside the
+    * text layer
+    */
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
     const range = sel.getRangeAt(0);
@@ -373,13 +406,17 @@ const PDFView = (() => {
                                             pageDiv.getBoundingClientRect()) });
   }
 
-  /** Draw every anchor on this document. `list` items are {id, doc_loc, color}. */
   function showAnchors(list) {
+    /* Shows every anchor on this document, replacing the ones drawn before.
+    * Items are {id, doc_loc, color}, those without a doc_loc are dropped
+    */
     anchors = (list || []).filter(a => a && a.doc_loc);
     drawAnchors();
   }
 
   function drawAnchors() {
+    /* Repaints the highlight layer of every page from the anchor list
+    */
     if (!st.pages.length) return;
     for (const p of st.pages) p.hl.innerHTML = "";
     for (const a of anchors) {
@@ -399,9 +436,11 @@ const PDFView = (() => {
     }
   }
 
-  /** Every anchor under the pointer, tightest first. Several links can cover
-   *  the same words, so the caller gets them all and asks the user which. */
   function hitsAt(e) {
+    /* Every anchor under the pointer, tightest first.
+    * Several links can cover the same words, so the caller gets them all and
+    * asks the user which
+    */
     const pageDiv = pageOf(e.target);
     if (!pageDiv) return [];
     const box = pageDiv.getBoundingClientRect();
@@ -422,6 +461,8 @@ const PDFView = (() => {
   }
 
   function onClick(e) {
+    /* Hands the anchors under the pointer to the host, which follows them
+    */
     if (!onAnchorClick || !anchors.length) return;
     // The click that ends a drag-selection is not a click on a link.
     const sel = window.getSelection();
@@ -430,9 +471,11 @@ const PDFView = (() => {
     if (hits.length) onAnchorClick(hits, e);
   }
 
-  /** Passages are painted under the text layer and never take the pointer, so
-   *  a link only looks like one if we hit-test the pointer ourselves. */
   function onMove(e) {
+    /* Lights up the passage under the pointer, and the cursor with it.
+    * Highlights are painted under the text layer and never take the pointer,
+    * so the hit-testing is done here
+    */
     if (!anchors.length) return;
     const hit = hitsAt(e)[0];
     st.scroll.classList.toggle("anchor-hot", !!hit);
@@ -447,8 +490,11 @@ const PDFView = (() => {
     }
   }
 
-  /** Scroll a passage into view and flash it. */
   function reveal(doc_loc, anchorId) {
+    /* Scrolls a passage into view and flashes it.
+    * False when no document is open, or the passage is on a page this one
+    * does not have
+    */
     if (!doc_loc || !st.pages.length) return false;
     const p = st.pages[(doc_loc.page || 1) - 1];
     if (!p) return false;
@@ -463,16 +509,18 @@ const PDFView = (() => {
   }
 
   function flash(anchorId) {
+    /* Blinks every rect of one link
+    */
     const marks = st.scroll.querySelectorAll('[data-anchor="' + anchorId + '"]');
     marks.forEach(m => m.classList.add("flash"));
     setTimeout(() => marks.forEach(m => m.classList.remove("flash")), 1500);
   }
 
-  /* ---------- toolbar ---------- */
-
   function $bar(name) { return st.bar.querySelector('[data-pdf="' + name + '"]'); }
 
   function buildBar() {
+    /* Builds the toolbar: paging, status, zoom
+    */
     const bar = document.createElement("div");
     bar.className = "pdf-bar";
     bar.innerHTML =
@@ -508,6 +556,8 @@ const PDFView = (() => {
   function setStatus(t) { if (st.bar) $bar("status").textContent = t; }
 
   function stepZoom(dir) {
+    /* One step up or down the zoom ladder, from the scale in use
+    */
     const cur = st.scale;
     const next = dir > 0
       ? ZOOMS.find(z => z > cur + 0.01)
@@ -516,6 +566,9 @@ const PDFView = (() => {
   }
 
   function onScroll() {
+    /* Keeps the toolbar on the page holding the upper third of the viewport.
+    * Leaves the box alone while it is being typed in
+    */
     const mid = st.scroll.scrollTop + st.scroll.clientHeight / 3;
     for (const p of st.pages) {
       if (p.div.offsetTop + p.div.offsetHeight > mid) {
@@ -529,9 +582,9 @@ const PDFView = (() => {
     }
   }
 
-  /** Scroll page `n` into view. Used by the toolbar today and by anchor
-   *  navigation once links exist. */
   function goToPage(n) {
+    /* Scrolls page n into view, clamped to the document
+    */
     if (!st.pages.length || !Number.isFinite(n)) return;
     n = Math.min(Math.max(1, n), st.pages.length);
     st.scroll.scrollTo({ top: st.pages[n - 1].div.offsetTop - 8, behavior: "smooth" });

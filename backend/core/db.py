@@ -1,3 +1,10 @@
+"""The tables, and the one engine every request shares.
+These models are the schema of record — ``migrations`` only catches an older
+file up to them, it never leads.
+Nothing is opened at import: the engine is built on the first ``session``,
+and the file itself by ``init_db``
+"""
+
 import os
 
 from sqlalchemy import Boolean, Index, Integer, String, Text, event
@@ -17,6 +24,11 @@ class Base(DeclarativeBase):
 
 
 class Source(Base):
+    """A document of the library, shared by every project that adds it.
+    The file lives under ``DATA_DIR`` at ``source_path``, and deleting the row
+    is not enough to remove it
+    """
+
     __tablename__ = "sources"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)  # src_<hex>
@@ -32,6 +44,11 @@ Index("ix_sources_url", Source.url)  # dedup lookups by import URL
 
 
 class User(Base):
+    """An author, identified by ``name`` alone.
+    There is no credential here — authentication has not landed, and
+    ``config.DEFAULT_USER`` stands in for whoever is at the keyboard
+    """
+
     __tablename__ = "users"
 
     name: Mapped[str] = mapped_column(String(120), primary_key=True)
@@ -40,6 +57,14 @@ class User(Base):
 
 
 class Project(Base):
+    """A workspace gathering sources, note pages and members.
+    ``kind`` is ``personal`` — one per user, named in ``owner_user``, and
+    refused deletion — or ``team``, which leaves ``owner_user`` empty and
+    knows its owner only through a member row.
+    The four booleans are the project's capabilities, seeded at creation from
+    ``config.PERSONAL_CAPS`` or ``TEAM_CAPS`` and editable per project after
+    """
+
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)  # prj_<hex>
@@ -56,6 +81,11 @@ class Project(Base):
 
 
 class ProjectMember(Base):
+    """One user's membership of one project, at one role.
+    ``color`` is theirs throughout that project, in the blame gutter and under
+    every anchor they made
+    """
+
     __tablename__ = "project_members"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -70,6 +100,11 @@ Index("ix_project_member_unique", ProjectMember.project_id, ProjectMember.name,
 
 
 class ProjectSource(Base):
+    """A source placed in a project, at ``folder``.
+    One source can sit in many projects, filed differently in each, which is
+    why the folder belongs here and not on the source
+    """
+
     __tablename__ = "project_sources"
 
     project_id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -80,6 +115,11 @@ class ProjectSource(Base):
 
 
 class ProjectFolder(Base):
+    """A folder of a project's library, ancestors stored as their own rows.
+    The tree is really implied by ``ProjectSource.folder``, so these rows
+    exist for the folders holding nothing yet
+    """
+
     __tablename__ = "project_folders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -93,6 +133,13 @@ Index("ix_project_folder_unique", ProjectFolder.project_id, ProjectFolder.path,
 
 
 class NotePage(Base):
+    """One page of a project's notes, started by ``created_by`` but writable
+    by anyone the project's roles allow.
+    ``blame`` says who last wrote each line of ``content``, run-length encoded
+    so a long page stays a short row, and ``version`` is bumped on every save
+    to catch a stale editor
+    """
+
     __tablename__ = "note_pages"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)  # note_<hex>
@@ -112,11 +159,10 @@ class NotePage(Base):
 
 class NoteAnchor(Base):
     """A sentence of a note page tied to a passage of a source.
-
-    Both ends are quote locators (JSON: exact/prefix/suffix plus a char offset
-    used only as a hint), so an anchor survives edits on either side and never
-    needs a marker inside the note text. The note content is not touched by
-    this table at all — see plan-anchors.md.
+    Both ends are quote locators, JSON holding exact, prefix and suffix plus a
+    character offset used only as a hint, so an anchor survives edits on
+    either side and needs no marker inside the note text.
+    Nothing here touches ``NotePage.content``
     """
 
     __tablename__ = "note_anchors"
@@ -136,6 +182,11 @@ Index("ix_note_anchor_doc", NoteAnchor.project_id, NoteAnchor.source_id)
 
 
 class SourceQuiz(Base):
+    """The generated quiz for one source in one project, and the answers so
+    far.
+    Per project, so the same source quizzed in two of them keeps two scores
+    """
+
     __tablename__ = "source_quiz"
 
     project_id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -149,6 +200,11 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 def _def_db() -> None:
+    """Builds the engine and the session factory, once.
+    The pragmas are per connection, not per database: WAL so a reader never
+    blocks the writer, and a busy timeout so a concurrent write waits its turn
+    instead of raising ``database is locked``
+    """
     global _engine, _session_factory
     if _engine is not None:
         return
@@ -165,16 +221,28 @@ def _def_db() -> None:
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
 def session() -> AsyncSession:
+    """A fresh session, building the engine on first use.
+    Not a context manager itself — callers do ``async with db.session()``
+    """
     _def_db()
     return _session_factory()
 
 async def init_db() -> None:
+    """Creates the database file, its directory, and every table still
+    missing.
+    Existing tables are left as they are, columns included, which is what
+    ``migrations.run`` is for — so call this first
+    """
     _def_db()
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     async with _engine.begin() as conn:  # type: ignore[union-attr]
         await conn.run_sync(Base.metadata.create_all)
 
 async def dispose() -> None:
+    """Closes the pool at shutdown.
+    The engine is forgotten rather than marked dead, so a ``session`` after
+    this quietly builds a new one instead of failing
+    """
     global _engine, _session_factory
     if _engine is not None:
         await _engine.dispose()

@@ -2,20 +2,8 @@
 
 /* Grounding note sentences in the document.
  *
- * An anchor is an annotation, never an edit: nothing here writes to the note's
- * content. Every link is drawn from a quote locator resolved on each render,
- * which is why a sentence keeps its link through edits above it and why the
- * blame gutter never sees any of this. See plan-anchors.md.
- *
- * A link can be started from either end — select a sentence and pick a
- * passage, or select a passage and pick a sentence — and followed from either
- * end, in the editor, in the rendered note, and in the document.
- *
- * The editor is a <textarea>, so ranges cannot be styled and a floating menu
- * cannot be positioned by getClientRects(). Both are measured through the same
- * hidden mirror the blame gutter already uses to line its stripes up with
- * wrapped lines. Every other surface is ordinary HTML and goes through
- * makeTextSurface (surface.js).
+ * A link can be started from either end: note -> source and source -> note,
+ * directly from text selection.
  */
 
 function makeAnchors(cfg) {
@@ -35,20 +23,16 @@ function makeAnchors(cfg) {
   let docSurface = null;    // markdown / HTML documents (PDFs use PDFView)
   let preview = null;       // the rendered note
   let menu = null, docMenu = null, chip = null, chooser = null;
-  // An HTML source lives in its own frame, and events inside a frame never
-  // reach this document. Every listener that watches for a selection or for
-  // Escape has to be attached there as well, or linking simply never fires.
   let frameDoc = null;
 
   const watched = () => (frameDoc ? [document, frameDoc] : [document]);
 
   const isPdfDoc = () => (cfg.docTarget() || {}).kind === "pdf";
 
-  /* ---------- measuring the textarea ---------- */
-
-  /** Rectangles for each range, in unscrolled editor coordinates. Ranges must
-   *  be sorted and must not overlap. */
   function measureRanges(text, ranges) {
+    /* Rects of each range, in absolute editor coords.
+    * Ranges must be sorted and non-overlapping
+    */
     const ta = cfg.editor(), mirror = cfg.mirror();
     const cs = getComputedStyle(ta);
     for (const prop of ["fontFamily", "fontSize", "fontWeight", "lineHeight",
@@ -81,17 +65,14 @@ function makeAnchors(cfg) {
                    w: r.width, h: r.height })));
   }
 
-  /* ---------- drawing over the editor ---------- */
-
   function draw() {
+    /* Redraws the editor highlights, and the preview, from resolved anchors
+    */
     const layer = cfg.layer(), ta = cfg.editor();
     layer.innerHTML = "";
     S.marks = [];
     S.lost = 0;
 
-    // Resolving needs no layout, so it happens whichever mode we are in — the
-    // textarea keeps its value while hidden. Only measuring needs the editor
-    // on screen, and the rendered note is drawn either way.
     const text = ta.value;
     const hits = [];
     for (const a of S.mine) {
@@ -146,8 +127,9 @@ function makeAnchors(cfg) {
     report();
   }
 
-  /** The rendered note carries the same links, in the same colours. */
   function drawPreview() {
+    /* Same links, same colors, in the rendered note
+    */
     const host = cfg.preview && cfg.preview();
     if (!host) return;
     if (!preview) {
@@ -163,6 +145,8 @@ function makeAnchors(cfg) {
   }
 
   function anchorTitle(a) {
+    /* Tooltip of an editor mark: target page, quote, available actions
+    */
     const q = (a.doc_loc && a.doc_loc.exact || "").replace(/\s+/g, " ").trim();
     const page = a.doc_loc && a.doc_loc.page;
     return "→ " + (page ? "page " + page : "the document")
@@ -171,10 +155,14 @@ function makeAnchors(cfg) {
   }
 
   function report() {
+    /* Hands the host the mark count and the unresolved count
+    */
     if (cfg.onChange) cfg.onChange({ count: S.marks.length, lost: S.lost });
   }
 
   function syncScroll() {
+    /* Follows the editor scroll: shifts the track, repositions the menu
+    */
     const track = cfg.layer().querySelector(".anchor-track");
     if (track) {
       track.style.transform = "translateY(" + -cfg.editor().scrollTop + "px)";
@@ -182,11 +170,9 @@ function makeAnchors(cfg) {
     placeMenu();
   }
 
-  /* ---------- the document surface ---------- */
-
-  /** Rebuild the surface for whatever the viewer is showing. PDFs are drawn by
-   *  PDFView; everything else is HTML and goes through makeTextSurface. */
   function bindDocSurface() {
+    /* (Re)builds the text surface of an HTML document
+    */
     if (docSurface) { docSurface.detach(); docSurface = null; }
     if (frameDoc) {
       frameDoc.removeEventListener("mouseup", onSelectInDoc, true);
@@ -209,6 +195,8 @@ function makeAnchors(cfg) {
   }
 
   function showDocAnchors() {
+    /* Shows every author's anchors on the document side
+    */
     const list = S.all.map(a => ({
       id: a.id, loc: a.doc_loc, doc_loc: a.doc_loc, note_id: a.note_id,
       color: blameColor(cfg.colors(), a.created_by),
@@ -218,18 +206,22 @@ function makeAnchors(cfg) {
   }
 
   function captureDoc() {
+    /* Locator of the current document selection, null if none
+    */
     if (isPdfDoc()) return PDFView.captureSelection();
     return docSurface ? docSurface.capture() : null;
   }
 
   function revealInDoc(a) {
+    /* Scrolls the document to an anchor's passage, false if unreachable
+    */
     if (isPdfDoc()) return PDFView.reveal(a.doc_loc, a.id);
     return docSurface ? docSurface.reveal(a.id) : false;
   }
 
-  /* ---------- menus ---------- */
-
   function ensureMenu() {
+    /* Builds, once, the editor's "Link to source" menu
+    */
     if (menu) return menu;
     menu = document.createElement("div");
     menu.className = "anchor-menu hidden";
@@ -241,6 +233,8 @@ function makeAnchors(cfg) {
   }
 
   function showMenu() {
+    /* Offers the menu when the editor selection can start a link
+    */
     const ta = cfg.editor();
     const a = ta.selectionStart, b = ta.selectionEnd;
     if (S.pending || b <= a || !cfg.canLink() || !canCapture()) return hideMenu();
@@ -253,6 +247,9 @@ function makeAnchors(cfg) {
   }
 
   function placeMenu() {
+    /* Puts the menu below the selection end, clamped inside the editor.
+    * Hides it if the selection moved
+    */
     if (!menu || menu.classList.contains("hidden")) return;
     const ta = cfg.editor();
     const a = Number(menu.dataset.start), b = Number(menu.dataset.end);
@@ -268,10 +265,10 @@ function makeAnchors(cfg) {
 
   function hideMenu() { if (menu) menu.classList.add("hidden"); }
 
-  /** The mirror of the editor's menu, for a passage picked in the document.
-   *  Placed at the pointer, because a PDF page and an iframe do not share a
-   *  coordinate system with this page. */
   function ensureDocMenu() {
+    /* Builds once the document's "Link to note" floating menu,
+    * since PDF pages and frames have their own coordinates
+    */
     if (docMenu) return docMenu;
     docMenu = document.createElement("div");
     docMenu.className = "anchor-menu floating hidden";
@@ -282,8 +279,9 @@ function makeAnchors(cfg) {
     return docMenu;
   }
 
-  /** A selection made in the document offers the link the other way round. */
   function onSelectInDoc(e) {
+    /* Selecting in the document offers the link the other way round
+    */
     if (S.pending || !cfg.canLink() || !canCapture()) return hideDocMenu();
     if (!inDocPane(e.target)) return hideDocMenu();
     const [x, y] = toHostPoint(e);
@@ -294,9 +292,10 @@ function makeAnchors(cfg) {
     }, 0);
   }
 
-  /** Pointer coordinates in this page's terms: an event raised inside the
-   *  source's frame is measured against that frame, not against the window. */
   function toHostPoint(e) {
+    /* Pointer coordinates in this page's terms.
+    * An event raised in the source's frame is measured against that frame
+    */
     const d = e && e.target && e.target.ownerDocument;
     const frame = d && d !== document && d.defaultView && d.defaultView.frameElement;
     if (!frame) return [(e && e.clientX) || 0, (e && e.clientY) || 0];
@@ -305,6 +304,8 @@ function makeAnchors(cfg) {
   }
 
   function showDocMenu(x, y) {
+    /* Shows the floating menu at the pointer, clamped to the window
+    */
     const m = ensureDocMenu();
     m.classList.remove("hidden");
     m.style.left = Math.min(x + 6, window.innerWidth - 130) + "px";
@@ -314,15 +315,18 @@ function makeAnchors(cfg) {
   function hideDocMenu() { if (docMenu) docMenu.classList.add("hidden"); }
 
   function canCapture() {
+    /* Whether the open document can yield a selection
+    */
     const t = cfg.docTarget();
     if (!t) return false;
     if (t.kind === "pdf") return PDFView.isOpen;
     return !!docSurface;
   }
 
-  /* ---------- making a link, from either end ---------- */
-
   function startFromNote() {
+    /* Starts a link from the editor selection.
+    * Freezes the editor, then waits for a passage to be picked
+    */
     const ta = cfg.editor();
     const start = Number(menu.dataset.start), end = Number(menu.dataset.end);
     hideMenu();
@@ -337,6 +341,9 @@ function makeAnchors(cfg) {
   }
 
   async function startFromDoc() {
+    /* Starts a link from the document selection.
+    * Switches to edit mode, then waits for a sentence to be picked
+    */
     hideDocMenu();
     const doc_loc = captureDoc();
     if (!doc_loc) return;
@@ -351,6 +358,8 @@ function makeAnchors(cfg) {
   }
 
   function listenDuringLink() {
+    /* Watches every document, frames included, for the pick or for Escape
+    */
     for (const d of watched()) {
       d.addEventListener("keydown", onKeyDuringLink, true);
       d.addEventListener("mouseup", onPickDuringLink, true);
@@ -358,6 +367,8 @@ function makeAnchors(cfg) {
   }
 
   function drawPending(start, end) {
+    /* Outlines the half-linked sentence in the editor
+    */
     const ta = cfg.editor();
     const boxes = measureRanges(ta.value, [{ start, end }])[0] || [];
     const track = document.createElement("div");
@@ -376,12 +387,18 @@ function makeAnchors(cfg) {
   }
 
   function onKeyDuringLink(e) {
+    /* Escape gives up on the pending link
+    */
     if (e.key === "Escape") {
       e.preventDefault(); e.stopPropagation(); leaveLinkMode();
     }
   }
 
   function onPickDuringLink(e) {
+    /* Other end of the link.
+    * A passage when started from the note, a sentence when started from
+    * the document
+    */
     if (!S.pending) return;
     if (S.pending.dir === "fromNote") {
       if (!inDocPane(e.target)) return;
@@ -404,6 +421,8 @@ function makeAnchors(cfg) {
   }
 
   function inDocPane(node) {
+    /* Whether a node belongs to the document pane, its frame included
+    */
     const pane = cfg.docPane();
     if (pane && pane.contains(node)) return true;
     const t = cfg.docTarget();
@@ -412,6 +431,8 @@ function makeAnchors(cfg) {
   }
 
   function leaveLinkMode() {
+    /* Drops the pending link and the listeners it installed
+    */
     if (!S.pending) return;
     S.pending = null;
     cfg.editor().readOnly = !cfg.canLink();
@@ -424,6 +445,8 @@ function makeAnchors(cfg) {
   }
 
   async function commit(note_loc, doc_loc) {
+    /* Saves the finished link, then reveals it and offers to undo
+    */
     const p = S.pending;
     leaveLinkMode();
     try {
@@ -446,8 +469,9 @@ function makeAnchors(cfg) {
     }
   }
 
-  /** Delete any link whose sentence overlaps the one being linked now. */
   async function dropOverlapping(note_loc) {
+    /* Deletes any link whose sentence overlaps the one being linked now
+    */
     const text = cfg.editor().value;
     const at = resolveLocator(text, note_loc);
     if (!at) return;
@@ -463,6 +487,8 @@ function makeAnchors(cfg) {
   }
 
   function clearSelections() {
+    /* Clears the selection here and in the source's frame
+    */
     window.getSelection().removeAllRanges();
     const t = cfg.docTarget();
     if (t && t.win && t.win !== window) {
@@ -470,9 +496,9 @@ function makeAnchors(cfg) {
     }
   }
 
-  /* ---------- undo ---------- */
-
   function offerUndo(anchor) {
+    /* Undo chip, for the 8 seconds following a link
+    */
     if (chip) chip.remove();
     chip = document.createElement("div");
     chip.className = "anchor-chip";
@@ -489,16 +515,12 @@ function makeAnchors(cfg) {
     setTimeout(() => { if (chip === mine) { chip.remove(); chip = null; } }, 8000);
   }
 
-  /** A sentence deleted from the note takes its link with it.
-   *
-   *  Called after a save, never on a keystroke: mid-edit a quote is often
-   *  momentarily unfindable — selecting a sentence and retyping it passes
-   *  through a state where it is gone — and a link must not die because
-   *  someone was halfway through rewording. A link on someone else's page that
-   *  we are not allowed to delete simply stays, and the footer keeps counting
-   *  it as unresolved.
-   */
   async function pruneLost() {
+    /* Drops the links whose sentence left the note.
+    * Called after a save, never on a keystroke, as a quote is often
+    * momentarily unfindable mid-edit.
+    * Links on someone else's page stay, and keep counting as unresolved
+    */
     if (S.pending || !S.mine.length || !cfg.noteId()) return;
     const text = cfg.editor().value;
     const gone = S.mine.filter(a => !resolveLocator(text, a.note_loc));
@@ -514,6 +536,8 @@ function makeAnchors(cfg) {
   }
 
   async function unlink(aid, quiet) {
+    /* Deletes one link, silently when undoing
+    */
     try {
       await api("/api/anchor/" + aid, { method: "DELETE" });
       await load();
@@ -523,9 +547,9 @@ function makeAnchors(cfg) {
     }
   }
 
-  /* ---------- following ---------- */
-
   function markAt(e) {
+    /* Mark under the pointer, null if none
+    */
     const ta = cfg.editor();
     const box = ta.getBoundingClientRect();
     const x = e.clientX - box.left;
@@ -538,8 +562,10 @@ function makeAnchors(cfg) {
     return null;
   }
 
-  /** One highlight can sit under another. Rather than guess, ask. */
   function choose(hits, where, ev) {
+    /* Follows a click.
+    * One highlight can sit under another, so rather than guess, ask
+    */
     hideChooser();
     const ids = hits.map(h => h.id || (h.a && h.a.id)).filter(Boolean);
     const list = ids.map(id => S.all.find(a => a.id === id)).filter(Boolean);
@@ -576,8 +602,9 @@ function makeAnchors(cfg) {
                                                { once: true }), 0);
   }
 
-  /** Hovering an entry in the chooser shows which one it means. */
   function preflash(a, where) {
+    /* Hovering an entry of the chooser shows which link it means
+    */
     if (where === "toNote") {
       const m = S.marks.find(x => x.a.id === a.id);
       if (m) {
@@ -597,19 +624,24 @@ function makeAnchors(cfg) {
   }
 
   function go(a, where) {
+    /* Follows a link, toward the document or toward the note
+    */
     if (where === "toDoc") return followToDoc(a);
     return followToNote(a);
   }
 
   function followToDoc(a) {
+    /* Reveals the passage, warns when its document is not open
+    */
     if (!revealInDoc(a)) {
       toast("That passage is in a document that is not open", "warn");
     }
   }
 
-  /** A passage was clicked in the document: land on its sentence, wherever it
-   *  lives — another note page, the editor, or the rendered note. */
   async function followToNote(a) {
+    /* Lands on the sentence, wherever it lives.
+    * Another note page, the editor, or the rendered note
+    */
     if (a.note_id !== cfg.noteId()) {
       const ok = await cfg.openNote(a.note_id);
       if (!ok) {
@@ -634,9 +666,9 @@ function makeAnchors(cfg) {
     setTimeout(() => m.els.forEach(el => el.classList.remove("flash")), 1600);
   }
 
-  /* ---------- loading ---------- */
-
   async function load() {
+    /* Fetches this note's anchors, and every anchor on the source
+    */
     const nid = cfg.noteId(), sid = cfg.sourceId(), pid = cfg.projectId();
     bindDocSurface();
     if (!nid || !sid) {
@@ -660,6 +692,8 @@ function makeAnchors(cfg) {
   }
 
   function clear() {
+    /* Wipes every anchor and surface, back to a blank state
+    */
     S.mine = []; S.all = []; S.marks = []; S.lost = 0;
     leaveLinkMode();
     cfg.layer().innerHTML = "";
@@ -668,8 +702,6 @@ function makeAnchors(cfg) {
     hideMenu(); hideDocMenu(); hideChooser();
     report();
   }
-
-  /* ---------- wiring ---------- */
 
   const ta = cfg.editor();
   ta.addEventListener("mouseup", () => setTimeout(showMenu, 0));

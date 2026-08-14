@@ -37,28 +37,32 @@ function makeTree(cfg) {
   const host = cfg.host;
   const readOnly = () => (cfg.readOnly ? cfg.readOnly() : false);
 
-
-  /* ---------- fold state (per project, per browser) ---------- */
-
   function readSet(key) {
+    /* Set stored under a localStorage key, empty when missing or corrupt
+    */
     try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); }
     catch (_) { return new Set(); }
   }
+
   function saveSets() {
+    /* Persists both fold sets, per project and per browser
+    */
     localStorage.setItem("kndb.collapsed." + T.pid, JSON.stringify([...T.collapsed]));
     localStorage.setItem("kndb.expanded." + T.pid, JSON.stringify([...T.expanded]));
   }
 
   function setProject(pid) {
+    /* Switches to another project, loading its fold state
+    */
     T.pid = pid || "";
     T.collapsed = readSet("kndb.collapsed." + T.pid);
     T.expanded = readSet("kndb.expanded." + T.pid);
   }
 
-
-  /* ---------- data ---------- */
-
   function setData(d) {
+    /* Replaces the tree contents.
+    * A selection on a source or a note that is gone is dropped
+    */
     T.folders = d.folders || [];
     T.sources = d.sources || [];
     T.notes = d.notes || [];
@@ -73,8 +77,9 @@ function makeTree(cfg) {
     return path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
   }
 
-  /** Where an item currently lives. */
   function refFolder(ref) {
+    /* Folder an item currently lives in, "" at the root
+    */
     if (!ref) return "";
     if (ref.kind === "folder") return parentFolder(ref.id);
     const item = ref.kind === "note" ? note(ref.id) : source(ref.id);
@@ -82,8 +87,9 @@ function makeTree(cfg) {
   }
 
   function treeModel() {
-    /* Folders, sources and notes into one nested structure. The folder list
-     * already contains every ancestor, so a flat pass suffices. */
+    /* Folders, sources and notes as one nested structure, rooted at "".
+    * The folder list already holds every ancestor, so a flat pass suffices
+    */
     const nodes = new Map([["", { path: "", children: [], sources: [], notes: [] }]]);
     for (const path of T.folders) {
       nodes.set(path, { path, children: [], sources: [], notes: [] });
@@ -96,18 +102,20 @@ function makeTree(cfg) {
     return nodes.get("");
   }
 
-
-  /* ---------- filtering ---------- */
-
-  /** `pred(kind, item)` decides one row; pass null to clear the filter. A
-   *  folder survives if it matches or if anything under it did, so a hit deep
-   *  in the tree stays reachable. */
   function applyFilter(pred) {
+    /* Installs a row filter and redraws.
+    * pred(kind, item) decides one row, null shows everything
+    */
     T.pred = pred || null;
     render();
   }
 
   function visibleSet() {
+    /* Keys ("f:path", "s:id", "n:id") of the rows the filter keeps, null when
+    * there is no filter.
+    * A folder survives if it matches or if anything under it did, so a hit
+    * deep in the tree stays reachable
+    */
     if (!T.pred) return null;
     const keep = new Set();
     const keepAncestors = path => {
@@ -130,9 +138,11 @@ function makeTree(cfg) {
     return keep;
   }
 
-  /** The default filter: a plain word matches the name or a tag, "@word"
-   *  matches tags only. Both pages search the same way. */
   function queryPredicate(q) {
+    /* Default filter: a plain word matches the name or a tag, "@word" matches
+    * tags only.
+    * Only sources carry tags. Null for an empty query
+    */
     const f = String(q || "").trim().toLowerCase();
     if (!f) return null;
     const tagOnly = f.startsWith("@");
@@ -147,10 +157,9 @@ function makeTree(cfg) {
     };
   }
 
-
-  /* ---------- rendering ---------- */
-
   function render() {
+    /* Redraws the tree, or the empty and no-match placeholders
+    */
     if (!T.sources.length && !T.notes.length && !T.folders.length) {
       host.innerHTML = cfg.empty || '<div class="empty">Nothing here yet.</div>';
       return;
@@ -164,6 +173,9 @@ function makeTree(cfg) {
   }
 
   function drawNode(node, depth, keep) {
+    /* Draws one node's folders, then its notes, then its sources.
+    * Rows go flat into the host, indented by depth, and open folders recurse
+    */
     const pad = 6 + depth * 14 + "px";
 
     for (const child of node.children.sort((a, b) => a.path.localeCompare(b.path))) {
@@ -226,9 +238,10 @@ function makeTree(cfg) {
     }
   }
 
-  /** The unfolded half of a source row: what the flat personal list used to
-   *  show inline — the tags the search box matches, and the quiz count. */
   function detailRow(s, depth) {
+    /* Unfolded half of a source row: the tags the search box matches, and the
+    * quiz count when the page asks for it
+    */
     const el = document.createElement("div");
     el.className = "tree-detail" + (isSel("source", s.id) ? " active" : "");
     el.dataset.for = s.id;
@@ -246,9 +259,10 @@ function makeTree(cfg) {
     return T.sel && T.sel.kind === kind && T.sel.id === id;
   }
 
-  /** Select programmatically — same path as a click, so the page only ever has
-   *  one way to react to a selection. */
   async function setSelection(ref) {
+    /* Selects programmatically, down the same path as a click, so the page has
+    * one way to react to a selection
+    */
     T.sel = ref;
     render();
     if (cfg.onSelect) await cfg.onSelect(ref);
@@ -257,9 +271,6 @@ function makeTree(cfg) {
   function canDeleteNote(page) {
     return !readOnly() && cfg.onDeleteNote && noteDeletable(page, cfg.role ? cfg.role() : "");
   }
-
-
-  /* ---------- clicks ---------- */
 
   host.addEventListener("click", async e => {
     const rm = e.target.closest("[data-remove]");
@@ -293,9 +304,6 @@ function makeTree(cfg) {
     await setSelection(ref);
   });
 
-
-  /* ---------- drag & drop filing ---------- */
-
   /* A drop always resolves to a folder *path*, never to a row: dropping onto a
    * folder files into it, dropping onto a source or a note files beside it, and
    * dropping on the blank space under the tree files at the root. That keeps
@@ -306,6 +314,8 @@ function makeTree(cfg) {
   let _expandPath = null;
 
   function rowRef(row) {
+    /* {kind, id} of a tree row, null for anything else
+    */
     if (!row) return null;
     if (row.classList.contains("folder")) return { kind: "folder", id: row.dataset.folder };
     if (row.classList.contains("note")) return { kind: "note", id: row.dataset.note };
@@ -314,6 +324,8 @@ function makeTree(cfg) {
   }
 
   function dropFolderFor(target) {
+    /* Folder path a drop on this node files into, "" for the root
+    */
     if (!target || !target.closest) return "";
     // An unfolded tag line belongs to the row above it, not to the root.
     const detail = target.closest(".tree-detail");
@@ -324,6 +336,9 @@ function makeTree(cfg) {
   }
 
   function canDrop(ref, dest) {
+    /* Whether the drag may land here.
+    * A folder never moves into itself or into its own subtree
+    */
     if (!ref || readOnly()) return false;
     if (refFolder(ref) === dest) return false;             // already filed there
     if (ref.kind !== "folder") return true;
@@ -335,6 +350,8 @@ function makeTree(cfg) {
   }
 
   function showDropHint(dest) {
+    /* Marks the drop target, the whole list when it is the root
+    */
     const el = dest ? folderRow(dest) : host;
     if (el === _dropHint) return;
     clearDropHint();
@@ -348,9 +365,10 @@ function makeTree(cfg) {
     _dropHint = null;
   }
 
-  /** Hovering a collapsed folder mid-drag opens it, so a nested target can be
-   *  reached without dropping and starting over. */
   function queueExpand(dest) {
+    /* Opens a collapsed folder hovered mid-drag, so a nested target can be
+    * reached without dropping and starting over
+    */
     if (dest === _expandPath) return;
     clearTimeout(_expandTimer);
     _expandPath = dest;
@@ -408,6 +426,9 @@ function makeTree(cfg) {
   });
 
   async function fileInto(ref, dest) {
+    /* Files an item into a folder on the server, then reloads the tree.
+    * A folder landing on a name already taken there asks to merge first
+    */
     try {
       if (ref.kind === "source") {
         await api("/api/projects/" + T.pid + "/sources/" + ref.id + "/folder",
@@ -433,9 +454,10 @@ function makeTree(cfg) {
     }
   }
 
-  /** A moved folder takes its descendants with it, so the fold state and the
-   *  current selection have to follow the rename. */
   function remapPaths(from, to) {
+    /* Follows a folder rename: it takes its descendants with it, so the fold
+    * state and the current selection move too
+    */
     const move = p => (p === from ? to
       : p.startsWith(from + "/") ? to + p.slice(from.length) : null);
     T.collapsed = new Set([...T.collapsed].map(p => move(p) || p));
@@ -446,10 +468,9 @@ function makeTree(cfg) {
     }
   }
 
-
-  /* ---------- folders & standalone notes ---------- */
-
   async function newFolder() {
+    /* Asks for a path and creates the folder, prefilled under the selected one
+    */
     const base = (T.sel && T.sel.kind === "folder") ? T.sel.id + "/" : "";
     const path = await askModal({
       title: "New folder",
@@ -469,6 +490,8 @@ function makeTree(cfg) {
   }
 
   async function newNote() {
+    /* Creates a standalone note in the selected folder, then selects it
+    */
     const folder = (T.sel && T.sel.kind === "folder") ? T.sel.id : "";
     const name = await askModal({
       title: "New standalone note",
@@ -489,6 +512,8 @@ function makeTree(cfg) {
   }
 
   async function deleteFolder(path) {
+    /* Removes a folder once confirmed, its contents moving up one level
+    */
     if (!await confirmModal({
       title: "Remove folder",
       body: 'Remove the folder "' + path + '"?',
@@ -502,7 +527,6 @@ function makeTree(cfg) {
       await cfg.reload();
     } catch (e) { toast(e.message, "err"); }
   }
-
 
   return {
     state: T,

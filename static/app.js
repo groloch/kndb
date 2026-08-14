@@ -1,11 +1,13 @@
 "use strict";
 
 /* Personal workspace. The library page itself — tree, viewers, note editor —
- * is library.js, shared with the project pages; what is left here is what only
- * the workspace does: importing, summarizing, and the quiz.
+ * is library.js, shared with the project pages.
+ * What is left here is what only the workspace does: importing, summarizing,
+ * and the quiz.
  *
  * $, api, toast, renderMarkdown, modals and the identity header live in
- * common.js, which must load first. */
+ * common.js, which must load first.
+ */
 
 const S = {
   pid: "",            // the workspace is a project like any other
@@ -17,8 +19,11 @@ const S = {
   qmEditId: null,
 };
 
-
 function streamSSE(path, body, onToken) {
+  /* POSTs a request and reads back the server's token stream.
+  * Resolves with the final event, rejects on an error event or on a stream
+  * that ends without one
+  */
   return new Promise((resolve, reject) => {
     fetch(path, {
       method: "POST",
@@ -58,6 +63,8 @@ function streamSSE(path, body, onToken) {
 }
 
 function setBusy(btn, busy, label) {
+  /* Disables a button under a temporary label, restores its own on release
+  */
   if (!btn) return;
   if (busy) {
     if (!btn.dataset.orig) btn.dataset.orig = btn.textContent;
@@ -68,9 +75,6 @@ function setBusy(btn, busy, label) {
     btn.textContent = btn.dataset.orig || label;
   }
 }
-
-
-/* ---------- The library page ---------- */
 
 /* One note per source here, and it is yours: no pages, no roles, no blame. */
 
@@ -96,14 +100,19 @@ const LIB = makeLibrary({
       ((KNDB.personal && KNDB.personal.members) || []).map(m => [m.name, m.color])),
   },
 
-  // Nothing may move while a summary is streaming into the note it would leave.
   canSelect: () => {
+    /* Nothing may move while a summary is streaming into the note it would
+    * leave
+    */
     if (!S.streaming) return true;
     toast("Wait for the summary to finish first", "warn");
     return false;
   },
 
   loadNotes: async s => {
+    /* The single note page of a source, into the editor.
+    * Remembers its version for the next save, null when it will not load
+    */
     try {
       const d = await api(`/api/note/${s.id}`);
       S.noteVersion = d.version;
@@ -116,6 +125,8 @@ const LIB = makeLibrary({
   },
 
   loadNote: async nid => {
+    /* A standalone note page by id, null when it will not load
+    */
     try {
       const d = await api(`/api/notes/${nid}`);
       S.noteVersion = d.note.version;
@@ -128,6 +139,9 @@ const LIB = makeLibrary({
   },
 
   persist: async (content, nid) => {
+    /* Saves the editor under the version it was loaded at.
+    * A selected source saves through its own route, a standalone page by id
+    */
     if (LIB.source) {
       // The source route resolves the workspace's single page for us.
       const d = await api(`/api/note/${LIB.source.id}`, {
@@ -147,15 +161,19 @@ const LIB = makeLibrary({
   },
 
   onSelect: ref => {
+    /* Tags, quiz and summary act on a source, on nothing else
+    */
     const src = !!ref && ref.kind === "source";
     ["btn-edit-tags", "btn-quiz", "btn-summarize"]
       .forEach(id => { $(`#${id}`).disabled = !src; });
   },
 
-  /* This box also understands "/project", which only the server can resolve, so
-   * sources are filtered by the ids it hands back; folders and standalone notes
-   * fall back to the name match every library shares. */
   searchPredicate: async (q, local) => {
+    /* Sources are filtered by the ids the server hands back, as it alone
+    * resolves a query like "/project".
+    * Folders and standalone notes fall back to the name match every library
+    * shares
+    */
     let ids = null;
     try {
       ids = new Set((await api("/api/sources?q=" + encodeURIComponent(q))).sources
@@ -168,18 +186,17 @@ const LIB = makeLibrary({
 
 const refreshTree = LIB.refreshTree;
 
-/** Freshly imported sources open ready to write in; everything else opens on
- *  what is already there. */
 async function selectSource(id, noteMode = "preview") {
+  /* Opens a source, switching the note to edit mode when asked for it.
+  * Any other mode leaves the one already in use, so only a fresh import opens
+  * ready to write in
+  */
   await LIB.selectSource(id);
   if (noteMode === "edit" && LIB.state.noteMode !== "edit") {
     LIB.state.noteMode = "edit";
     LIB.applyNoteMode();
   }
 }
-
-
-/* ---------- Import ---------- */
 
 $("#btn-import").addEventListener("click", () => {
   $("#import-url").value = "";
@@ -216,6 +233,8 @@ $("#import-submit").addEventListener("click", async () => {
 });
 
 async function deleteSource(id) {
+  /* Deletes a source after confirmation, out of every project holding it
+  */
   const s = LIB.state.sources.find(x => x.id === id);
   if (!await confirmModal({
     title: "Delete source",
@@ -235,6 +254,8 @@ async function deleteSource(id) {
 }
 
 async function deleteNotePage(nid) {
+  /* Deletes a note page after confirmation, its text with it
+  */
   const page = LIB.state.notes.find(n => n.id === nid);
   if (!await confirmModal({
     title: "Delete note page",
@@ -253,11 +274,10 @@ async function deleteNotePage(nid) {
   }
 }
 
-/* ---------- Quiz hub ---------- */
-
 /* One dialog for everything a source's quiz is: how it is going, and the three
  * things you can do about it. The generator, the player and the question
- * manager are opened from here rather than from the top bar. */
+ * manager are opened from here rather than from the top bar.
+ */
 
 const BOXES = [
   { label: "New", max: 0, color: "var(--border-strong)" },
@@ -267,6 +287,9 @@ const BOXES = [
 ];
 
 async function openQuizHub() {
+  /* Opens the quiz dialog on the selected source, quiz and stats loaded
+  * together
+  */
   if (!LIB.source) return;
   S.quiz = null;
   S.quizStats = null;
@@ -290,10 +313,11 @@ async function openQuizHub() {
   renderQuizHub();
 }
 
-/** Fold the per-question spaced-repetition stats into the few numbers worth
- *  showing. A question with no `next_review` has never been answered, which
- *  counts as due. */
 function quizSummary() {
+  /* Folds the per-question spaced-repetition stats into the few numbers worth
+  * showing.
+  * A question with no next_review has never been answered, and counts as due
+  */
   const questions = (S.quiz && S.quiz.questions) || [];
   const per = (S.quizStats && S.quizStats.questions) || {};
   const now = new Date().toISOString().slice(0, 19) + "Z";
@@ -311,6 +335,9 @@ function quizSummary() {
 }
 
 function renderQuizHub() {
+  /* Paints the counters, the box bar and the hint.
+  * Play stays disabled while the source has no question
+  */
   const { questions, played, correct, due, last, buckets } = quizSummary();
   const total = questions.length;
   $("#quiz-hub-stats").innerHTML = [
@@ -454,6 +481,9 @@ $("#btn-quiz-play").addEventListener("click", async () => {
 });
 
 function startQuizSession(quiz, questions) {
+  /* Runs one play-through, in the order the server gave.
+  * A missed question comes back once, at the end of the queue
+  */
   const body = $("#quiz-body");
   const queue = [...questions];
   const sid = LIB.source.id;
@@ -480,6 +510,8 @@ function startQuizSession(quiz, questions) {
   }
 
   function renderQuestion(q) {
+    /* One question, its answers shuffled so the right one moves about
+    */
     const opts = q.answers.map((text, idx) => ({ text, idx }));
     for (let i = opts.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -507,6 +539,9 @@ function startQuizSession(quiz, questions) {
   }
 
   function answer(q, chosen, btn) {
+    /* Marks the answer, requeues a missed question, and reports the result to
+    * the server
+    */
     const ok = chosen.idx === q.answer_index;
     attempted.add(q.id);
     total++;
@@ -532,6 +567,8 @@ function startQuizSession(quiz, questions) {
   }
 
   function renderSummary() {
+    /* Final score, and the tree picks up the new stats
+    */
     const pct = Math.round(100 * correct / Math.max(total, 1));
     body.innerHTML = `
       <div class="quiz-summary">
@@ -547,7 +584,6 @@ function startQuizSession(quiz, questions) {
   }
 }
 
-
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") hideCtx();
 });
@@ -560,12 +596,11 @@ $$(".modal").forEach(m => m.addEventListener("mousedown", e => {
   if (e.target === m) m.classList.add("hidden");
 }));
 
-/* ---------- Tags ---------- */
-
-/* The manager itself lives in common.js, so the project pages open the exact
- * same dialog. Tags are stored on the source row, which is why one added here
- * shows up in every project holding that source. */
 function editTags() {
+  /* Opens the tag manager, the very dialog common.js gives the project pages.
+  * Tags are stored on the source row, so one added here shows up in every
+  * project holding that source
+  */
   if (!LIB.source) return;
   openTagsModal({
     source: LIB.source,
@@ -575,9 +610,9 @@ function editTags() {
 
 $("#btn-edit-tags").addEventListener("click", editTags);
 
-/* ---------- Quiz management ---------- */
-
 async function openQuizManager() {
+  /* Opens the question manager on the selected source's quiz
+  */
   if (!LIB.source) return;
   S.qm = null;
   S.qmEditId = null;
@@ -593,6 +628,8 @@ async function openQuizManager() {
 }
 
 function renderQuizList() {
+  /* Lists the questions, the correct answer marked
+  */
   const list = $("#qm-list");
   const questions = (S.qm && S.qm.questions) || [];
   if (!questions.length) {
@@ -620,6 +657,8 @@ function renderQuizList() {
 }
 
 function resetQuizForm() {
+  /* Empties the form and leaves edit mode
+  */
   S.qmEditId = null;
   $("#qm-question").value = "";
   ["qm-a1", "qm-a2", "qm-a3", "qm-a4"].forEach(id => { $(`#${id}`).value = ""; });
@@ -629,6 +668,8 @@ function resetQuizForm() {
 }
 
 function loadQuizForm(qid) {
+  /* Fills the form with a question, for the next save to go over it
+  */
   const q = ((S.qm && S.qm.questions) || []).find(x => x.id === qid);
   if (!q) return;
   S.qmEditId = qid;
@@ -641,6 +682,8 @@ function loadQuizForm(qid) {
 }
 
 async function refreshQuizManager() {
+  /* Reloads the quiz after a change, and the tree with it
+  */
   try {
     S.qm = await api(`/api/quiz/${LIB.source.id}`);
   } catch (_) {}
@@ -650,6 +693,9 @@ async function refreshQuizManager() {
 }
 
 async function saveQuizForm() {
+  /* Adds the form's question, or saves it over the one being edited.
+  * Two answers at least, and the right one must be among those filled in
+  */
   if (!LIB.source) return;
   const question = $("#qm-question").value.trim();
   const answers = [1, 2, 3, 4].map(i => $(`#qm-a${i}`).value.trim());
@@ -711,11 +757,11 @@ $("#qm-list").addEventListener("click", async e => {
   }
 });
 
-/* ---------- Source context menu (right click) ---------- */
-
 function hideCtx() { $("#ctx-menu").classList.add("hidden"); }
 
 function showCtxMenu(x, y, s) {
+  /* Right-click menu of a source row, clamped inside the window
+  */
   const menu = $("#ctx-menu");
   menu.innerHTML = "";
   const items = [
@@ -758,8 +804,11 @@ document.addEventListener("click", e => {
   if (!e.target.closest("#ctx-menu")) hideCtx();
 });
 
-
 async function init() {
+  /* Identity first: the workspace's project id comes with it, and nothing
+  * works without it.
+  * A #src= fragment opens that source once the tree is up
+  */
   await initIdentity();
   S.pid = (KNDB.personal && KNDB.personal.id) || "";
   if (!S.pid) {

@@ -1,3 +1,7 @@
+"""The HTML shells.
+Each one is static — the page fetches everything it shows from the API
+"""
+
 import os
 
 from fastapi import APIRouter, HTTPException
@@ -32,6 +36,10 @@ async def projects_page():
 
 @router.get("/projects/{pid}")
 async def project_page(pid: str):
+    """The project shell, 404 when there is no such project.
+    Membership is not checked here: the page loads for anyone, and the API
+    calls it makes are what refuse a stranger
+    """
     if not await projects.get_project(pid):
         raise HTTPException(404, f"project {pid} not found")
     return page("project.html")

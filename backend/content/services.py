@@ -1,3 +1,9 @@
+"""What the app does with a source once it is stored: quizzes, summaries,
+spaced repetition.
+Reads the note pages and the document text, streams the model's answer, and
+writes the result back through the quiz and note stores
+"""
+
 import asyncio
 import os
 import time
@@ -14,13 +20,20 @@ _LENS = {"short": "~150 words", "medium": "~400 words", "detailed": "~900 words"
 
 
 def _now() -> str:
+    """UTC stamp, for anything compared against a schedule
+    """
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def _local_now() -> str:
+    """Local wall-clock stamp, for anything a human reads
+    """
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 async def material_for(scope: str, row: dict, notes_text: str = ""):
-    """Return ``(notes_text, document_text)`` depending on the requested scope."""
+    """(notes_text, document_text) for the requested scope, whichever falls
+    outside it empty.
+    Scope is "notes", "document" or "both"
+    """
     notes, doc = "", ""
     if scope in ("notes", "both"):
         notes = notes_text or ""
@@ -29,6 +42,12 @@ async def material_for(scope: str, row: dict, notes_text: str = ""):
     return notes, doc
 
 async def document_text(row: dict) -> str:
+    """The source document as plain text, "" for a type with no extractor.
+    Prefers the .txt sidecar the fetcher may have cached, cleaner than
+    anything re-extracted from the blob here.
+    An unparseable PDF yields a bracketed note rather than raising, while a
+    missing or unreadable file still raises
+    """
     stype, path = row["source_type"], row["source_path"]
 
     def _sidecar():
@@ -72,6 +91,9 @@ async def document_text(row: dict) -> str:
     return ""
 
 def _check_material(scope: str, notes: str, doc: str) -> None:
+    """Raises ValueError, message meant for the user, when the chosen scope
+    has nothing to work from
+    """
     if scope == "notes" and not notes.strip():
         raise ValueError("There are no personal notes for this source yet — "
                          "write some notes first, or pick a different scope.")
@@ -82,6 +104,13 @@ def _check_material(scope: str, notes: str, doc: str) -> None:
         raise ValueError("Both the notes and the document are empty for this source.")
 
 def _normalize_questions(data):
+    """Model output into the stored question shape, whatever it gave back.
+    Takes a bare list or a {"questions"}/{"quiz"} wrapper, answers as strings,
+    dicts or a {text: correct} mapping, and settles on the first answer when
+    none is flagged correct.
+    Caps at 40, drops questions left with fewer than two answers, and raises
+    ValueError when nothing usable survives
+    """
     if isinstance(data, dict):
         data = data.get("questions") or data.get("quiz") or []
     if not isinstance(data, list):
@@ -134,6 +163,10 @@ def _normalize_questions(data):
     return out
 
 def _init_question_stats(stats: dict, questions: list) -> None:
+    """Gives every question a blank stats row, leaving rows that exist alone.
+    Rows are keyed by question id, so a regenerated quiz keeps the history of
+    the ids it happens to reuse
+    """
     stats["num_questions"] = len(questions)
     stats["date_last_modified"] = _local_now()
     base = {"times_played": 0, "times_successful": 0, "box": 0,
@@ -143,6 +176,14 @@ def _init_question_stats(stats: dict, questions: list) -> None:
 
 async def stream_quiz(pid: str, sid: str, scope: str = "both", num_questions: int = 5,
                       difficulty: str = "medium", language: str = "English"):
+    """Builds a quiz from the source material, yielding token events as the
+    model writes.
+    num_questions is clamped to 1..20, and the material is truncated before it
+    reaches the prompt.
+    Ends on a "done" event or a single "error" one — nothing raises, the
+    caller is an SSE stream.
+    Quiz and stats are written only once the streamed JSON parses
+    """
     try:
         row = await store.get_source(sid)
         if not row:
@@ -186,6 +227,11 @@ async def stream_quiz(pid: str, sid: str, scope: str = "both", num_questions: in
         yield {"type": "error", "error": str(e)}
 
 async def record_answer(pid: str, sid: str, qid: str, success: bool) -> dict:
+    """Records one answer and reschedules the question, Leitner style.
+    A hit moves it up a box, a miss drops it back to box 0, and the box picks
+    how many days until it is due again.
+    Creates the stats row when the question has none
+    """
     stats = await quiz_store.read_stats(pid, sid)
     if not stats:
         stats = {"num_questions": 0, "questions": {}, "date_last_modified": _local_now(),
@@ -209,6 +255,8 @@ async def record_answer(pid: str, sid: str, qid: str, success: bool) -> dict:
     return q
 
 def _next_qid(questions: list) -> str:
+    """First free qN id in a quiz
+    """
     used = {str(q.get("id")) for q in questions}
     n = 1
     while f"q{n}" in used:
@@ -216,6 +264,11 @@ def _next_qid(questions: list) -> str:
     return f"q{n}"
 
 def _normalize_manual_question(question, answers, answer_index) -> dict:
+    """Validates a hand-written question, raising ValueError with a message
+    meant for the user.
+    Blank answers are dropped first, so an index counted against the list as
+    sent can end up out of range
+    """
     question = (question or "").strip()
     answers = [str(a).strip() for a in (answers or [])]
     answers = [a for a in answers if a]
@@ -233,6 +286,8 @@ def _normalize_manual_question(question, answers, answer_index) -> dict:
 
 async def add_quiz_question(pid: str, sid: str, question: str, answers: list,
                             answer_index: int = 0) -> dict:
+    """Appends a question to the quiz and opens a blank stats row for it
+    """
     quiz = await quiz_store.read_quiz(pid, sid)
     questions = quiz.setdefault("questions", [])
     payload = _normalize_manual_question(question, answers, answer_index)
@@ -256,6 +311,10 @@ async def add_quiz_question(pid: str, sid: str, question: str, answers: list,
 
 async def update_quiz_question(pid: str, sid: str, qid: str, question=None,
                                answers=None, answer_index=None) -> dict:
+    """Edits one question in place, the fields left None keeping their value.
+    Raises KeyError when the id is not in the quiz.
+    Stats are untouched, so the question keeps its box and its history
+    """
     quiz = await quiz_store.read_quiz(pid, sid)
     questions = quiz.get("questions", [])
     q = next((x for x in questions if x.get("id") == qid), None)
@@ -272,6 +331,9 @@ async def update_quiz_question(pid: str, sid: str, qid: str, question=None,
     return q
 
 async def delete_quiz_question(pid: str, sid: str, qid: str) -> None:
+    """Removes a question and the stats row that went with it.
+    Raises KeyError when the id is not in the quiz
+    """
     quiz = await quiz_store.read_quiz(pid, sid)
     questions = quiz.get("questions", [])
     remaining = [q for q in questions if q.get("id") != qid]
@@ -289,6 +351,10 @@ async def delete_quiz_question(pid: str, sid: str, qid: str) -> None:
         await quiz_store.save_stats(pid, sid, stats)
 
 async def quiz_order(pid: str, sid: str) -> list:
+    """Questions in review order: due first, then the weakest, then the lowest
+    box.
+    A question never played counts as due
+    """
     quiz = await quiz_store.read_quiz(pid, sid)
     stats = await quiz_store.read_stats(pid, sid)
     now = _now()
@@ -305,8 +371,11 @@ async def quiz_order(pid: str, sid: str) -> list:
 
 async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
                            length: str = "medium", language: str = "English"):
-    """Summarize the document, streaming token events; the summary is appended to
-    the note page under a dated heading."""
+    """Summarizes the document, yielding token events, then appends the result
+    to the note page under a dated heading.
+    The notes are not read, only the document, truncated to 10k characters.
+    Ends on a "done" event or a single "error" one, nothing raises
+    """
     try:
         row = await store.get_source(sid)
         if not row:

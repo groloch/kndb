@@ -1,3 +1,8 @@
+"""Note pages: the per-author documents of a project.
+A page hangs off a source or stands alone in a folder, and every line of it
+carries its author in a run-length blame map
+"""
+
 import json
 import secrets
 import time
@@ -15,12 +20,18 @@ _EDIT_ANY = config.EDIT_OTHERS_ROLES   # permissions.grants.edit_others in kndb.
 
 
 class NoteConflict(Exception):
+    """The page moved on since the version the editor started from.
+    Carries the version now stored, so the client can reload and rebase
+    """
     def __init__(self, version: int):
         super().__init__("this note was modified by someone else")
         self.version = version
 
 
 class NotePermission(Exception):
+    """An edit reaching into lines somebody else wrote, without the role for it.
+    Carries the offending line numbers, 1-based, and their owners
+    """
     def __init__(self, lines: list, owners: list):
         who = ", ".join(sorted(set(owners)))
         super().__init__(
@@ -38,6 +49,8 @@ def _ts() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 def _loads(s, default):
+    """Parsed JSON, the default when the column is empty or corrupt
+    """
     if not s:
         return default
     try:
@@ -49,6 +62,10 @@ def _dumps(v) -> str:
     return json.dumps(v, ensure_ascii=False)
 
 def _to_dict(p: NotePage, with_content: bool = True) -> dict:
+    """Page as a dict, its authors read off the blame map.
+    with_content=False drops the text and the blame, which is what the
+    listings hand back
+    """
     rle = _loads(p.blame, [])
     d = {
         "id": p.id,
@@ -71,6 +88,9 @@ def _to_dict(p: NotePage, with_content: bool = True) -> dict:
     return d
 
 def deletable_by(page: dict, user: str, role: str) -> str:
+    """Why this user cannot delete the page, "" when they can.
+    Takes an edit-others role, and the page must hold nobody else's text
+    """
     if role not in _EDIT_ANY:
         return (f"deleting a note page needs {' or '.join(_EDIT_ANY)}; "
                 f"you are {role}")
@@ -81,11 +101,15 @@ def deletable_by(page: dict, user: str, role: str) -> str:
     return ""
 
 async def get(nid: str) -> dict | None:
+    """The page with its content and blame, None when the id is unknown
+    """
     async with db.session() as s:
         p = (await s.execute(select(NotePage).where(NotePage.id == nid))).scalar_one_or_none()
     return _to_dict(p) if p else None
 
 async def list_for_source(pid: str, source_id: str) -> list:
+    """The pages of one source, in page order, without their content
+    """
     async with db.session() as s:
         rows = (await s.execute(
             select(NotePage).where(NotePage.project_id == pid,
@@ -94,6 +118,9 @@ async def list_for_source(pid: str, source_id: str) -> list:
     return [_to_dict(p, with_content=False) for p in rows]
 
 async def list_standalone(pid: str, folder: str | None = None) -> list:
+    """The pages attached to no source, without their content.
+    A folder of None spans the whole project, "" only the root
+    """
     async with db.session() as s:
         stmt = select(NotePage).where(NotePage.project_id == pid,
                                       NotePage.source_id == "")
@@ -105,6 +132,10 @@ async def list_standalone(pid: str, folder: str | None = None) -> list:
     return [_to_dict(p, with_content=False) for p in rows]
 
 async def combined_text(pid: str, source_id: str) -> str:
+    """Every page of a source as one markdown document, for the generators.
+    Blank pages are skipped, and a named page keeps its title and its author
+    in a heading
+    """
     async with db.session() as s:
         rows = (await s.execute(
             select(NotePage).where(NotePage.project_id == pid,
@@ -119,6 +150,9 @@ async def combined_text(pid: str, source_id: str) -> str:
     return "\n\n".join(parts)
 
 async def readme_for_folder(pid: str, folder: str) -> dict | None:
+    """The folder's README page, None when it has none.
+    The name is matched whatever its case
+    """
     folder = projects.norm_folder(folder)
     async with db.session() as s:
         rows = (await s.execute(
@@ -133,6 +167,11 @@ async def readme_for_folder(pid: str, folder: str) -> dict | None:
 async def create(pid: str, *, author: str, source_id: str = "", folder: str = "",
                  name: str = "", content: str = "", origin: dict | None = None,
                  rle: list | None = None) -> dict:
+    """Creates a page and returns it, at version 1.
+    It lands after the last page of the same source, and its lines are blamed
+    on the author unless a blame map comes in with them.
+    A page attached to a source is never in a folder
+    """
     now = _ts()
     nid = make_id()
     source_id = source_id or ""
@@ -156,6 +195,8 @@ async def create(pid: str, *, author: str, source_id: str = "", folder: str = ""
     return _to_dict(page)
 
 async def ensure_single(pid: str, source_id: str, *, author: str) -> dict:
+    """The source's first page, an empty one created when it has none
+    """
     pages = await list_for_source(pid, source_id)
     if pages:
         return await get(pages[0]["id"])
@@ -163,6 +204,12 @@ async def ensure_single(pid: str, source_id: str, *, author: str) -> dict:
 
 async def save(nid: str, content: str, *, author: str, role: str,
                base_version: int | None = None) -> dict:
+    """Rewrites a page, rebases its blame, returns the saved page.
+    Content that did not change is not a save: the version stays where it is.
+    Raises KeyError on an unknown id, NoteConflict when base_version is behind
+    the stored one (None skips the check), and NotePermission when the edit
+    touches another author's lines without an edit-others role
+    """
     now = _ts()
     async with db.session() as s:
         p = (await s.execute(select(NotePage).where(NotePage.id == nid))).scalar_one_or_none()
@@ -191,6 +238,12 @@ async def save(nid: str, content: str, *, author: str, role: str,
 
 async def append(nid: str, text: str, *, author: str, rle: list | None = None,
                  header: str = "") -> dict:
+    """Adds text at the end of a page, under an optional header.
+    Trailing blank lines go first, so appended blocks stay one blank line
+    apart.
+    The new lines are blamed on the author unless a blame map comes with them,
+    and an unknown id raises KeyError
+    """
     now = _ts()
     mine = {"author": author, "ts": now}
     async with db.session() as s:
@@ -223,6 +276,11 @@ async def append(nid: str, text: str, *, author: str, rle: list | None = None,
 
 async def rename(nid: str, *, name: str = None, folder: str = None,
                  position: int = None) -> dict | None:
+    """Renames, refiles or reorders a page, None when the id is unknown.
+    A field left None keeps what is stored, and a page attached to a source
+    ignores folder.
+    Returns the page without its content
+    """
     async with db.session() as s:
         p = (await s.execute(select(NotePage).where(NotePage.id == nid))).scalar_one_or_none()
         if p is None:
@@ -241,6 +299,8 @@ async def rename(nid: str, *, name: str = None, folder: str = None,
 # with them: deleting a page, unlinking a source, deleting a project.
 
 async def remove(nid: str) -> bool:
+    """Deletes a page and its anchors, False when the id is unknown
+    """
     async with db.session() as s:
         p = (await s.execute(select(NotePage).where(NotePage.id == nid))).scalar_one_or_none()
         if p is None:
@@ -251,12 +311,17 @@ async def remove(nid: str) -> bool:
     return True
 
 async def delete_for_project(pid: str) -> None:
+    """Drops every page of a project, anchors included
+    """
     async with db.session() as s:
         await s.execute(delete(NotePage).where(NotePage.project_id == pid))
         await s.commit()
     await anchors.delete_for_project(pid)
 
 async def delete_for_source(pid: str | None, source_id: str) -> None:
+    """Drops the pages attached to a source, anchors included, pid None
+    meaning every project at once
+    """
     stmt = select(NotePage.id).where(NotePage.source_id == source_id)
     if pid is not None:
         stmt = stmt.where(NotePage.project_id == pid)
@@ -267,6 +332,9 @@ async def delete_for_source(pid: str | None, source_id: str) -> None:
     await anchors.delete_for_notes(list(doomed))
 
 async def move_folder(pid: str, path: str, new_path: str) -> None:
+    """Moves the standalone pages of a folder subtree to a new path.
+    Pages in a descendant folder follow, keeping their tail
+    """
     async with db.session() as s:
         for p in (await s.execute(
             select(NotePage).where(NotePage.project_id == pid,
@@ -279,6 +347,9 @@ async def move_folder(pid: str, path: str, new_path: str) -> None:
         await s.commit()
 
 async def lift_folder(pid: str, path: str, parent: str) -> None:
+    """Empties a folder subtree into parent, for a folder being deleted.
+    The pages survive the folder: they move up rather than go with it
+    """
     async with db.session() as s:
         for p in (await s.execute(
             select(NotePage).where(NotePage.project_id == pid,

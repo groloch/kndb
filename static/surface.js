@@ -36,18 +36,19 @@ function makeTextSurface(cfg) {
   const win = () => (cfg.win && cfg.win()) || window;
   const doc = () => { const r = root(); return (r && r.ownerDocument) || document; };
 
-  /* ---------- text and offsets ---------- */
-
   function blockOf(node, stop) {
+    /* Block element a text node belongs to, walking out through inline tags
+    */
     let el = node.parentElement;
     while (el && el !== stop && INLINE_TAGS.has(el.tagName)) el = el.parentElement;
     return el;
   }
 
-  /** The surface's text as one string, plus where each text node starts in it.
-   *  Block boundaries become newlines so that a quote cannot silently run two
-   *  paragraphs together. */
   function flatten() {
+    /* The surface's text as one string, plus where each text node starts in it.
+    * Block boundaries become newlines, so a quote cannot silently run two
+    * paragraphs together. Script, style and overlay text is left out
+    */
     const r = root();
     const nodes = [];
     let text = "", prevBlock = null;
@@ -75,6 +76,8 @@ function makeTextSurface(cfg) {
   }
 
   function offsetOf(map, node, offset) {
+    /* Position in the flattened text of a DOM boundary, null when off the map
+    */
     if (node.nodeType === 3) {
       for (const e of map.nodes) if (e.node === node) return e.start + offset;
       return null;
@@ -89,6 +92,8 @@ function makeTextSurface(cfg) {
   }
 
   function nodeAt(map, offset) {
+    /* Text node and local offset holding a flat offset, null when past the end
+    */
     for (const e of map.nodes) {
       if (offset <= e.start + e.node.nodeValue.length) {
         return { node: e.node, offset: Math.max(0, offset - e.start) };
@@ -97,9 +102,9 @@ function makeTextSurface(cfg) {
     return null;
   }
 
-  /* ---------- capture ---------- */
-
   function capture() {
+    /* Locator of the current selection, null unless it sits inside the root
+    */
     const sel = win().getSelection();
     const r = root();
     if (!sel || sel.isCollapsed || !sel.rangeCount || !r) return null;
@@ -115,10 +120,10 @@ function makeTextSurface(cfg) {
     return Object.assign({ kind: "text", page: 0 }, quoteLocator(map.text, a, b));
   }
 
-  /* ---------- drawing ---------- */
-
-  /** A source's frame carries its own stylesheet, and ours is not in it. */
   function ensureStyles() {
+    /* Puts the highlight CSS in the surface's own document.
+    * A source's frame carries its own stylesheet, and ours is not in it
+    */
     const d = doc();
     if (d === document || d.getElementById("kndb-anchor-style")) return;
     const el = d.createElement("style");
@@ -137,6 +142,8 @@ function makeTextSurface(cfg) {
   }
 
   function ensureOverlay() {
+    /* Builds the overlay once, and makes the root a positioning context for it
+    */
     const r = root();
     ensureStyles();
     if (overlay && overlay.parentElement === r) return overlay;
@@ -148,11 +155,17 @@ function makeTextSurface(cfg) {
   }
 
   function show(list) {
+    /* Draws a new set of links, dropping the entries without a locator
+    */
     items = (list || []).filter(x => x && x.loc);
     redraw();
   }
 
   function redraw() {
+    /* Remeasures every highlight from a live Range.
+    * A locator that no longer resolves leaves its entry without rectangles,
+    * so it stops being hit-testable
+    */
     const r = root();
     if (!r || !r.isConnected) return;
     ensureOverlay();
@@ -193,9 +206,9 @@ function makeTextSurface(cfg) {
     }
   }
 
-  /* ---------- clicking and revealing ---------- */
-
   function hitTest(clientX, clientY) {
+    /* Links whose rectangles cover a viewport point, in draw order
+    */
     const r = root();
     if (!r) return [];
     const rr = r.getBoundingClientRect();
@@ -207,6 +220,8 @@ function makeTextSurface(cfg) {
   }
 
   function onClick(e) {
+    /* Hands the host every link under the pointer
+    */
     if (!cfg.onClick) return;
     const sel = win().getSelection();
     if (sel && !sel.isCollapsed) return;   // that was a selection, not a click
@@ -214,10 +229,12 @@ function makeTextSurface(cfg) {
     if (hits.length) cfg.onClick(hits, e);
   }
 
-  /** The overlay does not take the pointer, so hovering has to be worked out
-   *  the same way clicking is: hit-test, then dress the root and the rectangle
-   *  under the cursor so a link looks like one. */
   function onMove(e) {
+    /* Dresses the root and the rectangle under the cursor so a link looks
+    * like one.
+    * The overlay takes no pointer events, so hovering is hit-tested the same
+    * way a click is
+    */
     if (!items.length) return;
     const hit = hitTest(e.clientX, e.clientY)[0];
     const r = root();
@@ -234,6 +251,8 @@ function makeTextSurface(cfg) {
   }
 
   function onLeave() {
+    /* Undoes the hover dressing
+    */
     hovered = null;
     const r = root();
     if (r) r.classList.remove("anchor-hot");
@@ -244,6 +263,8 @@ function makeTextSurface(cfg) {
   }
 
   function reveal(id) {
+    /* Scrolls to a link and flashes it, false when it is not drawn
+    */
     const it = items.find(x => x.id === id);
     if (!it || !(it.rects || []).length) return false;
     const sc = scroller();
@@ -263,6 +284,9 @@ function makeTextSurface(cfg) {
   }
 
   function attach() {
+    /* Binds the pointer listeners to the scroller.
+    * Moves them when the scroller changed, and watches the root for resizes
+    */
     const sc = scroller();
     if (bound === sc) return;
     detach();
@@ -278,6 +302,8 @@ function makeTextSurface(cfg) {
   }
 
   function detach() {
+    /* Drops the pointer listeners and the resize observer
+    */
     if (bound) {
       bound.removeEventListener("click", onClick);
       bound.removeEventListener("mousemove", onMove);
@@ -289,6 +315,8 @@ function makeTextSurface(cfg) {
   }
 
   function clear() {
+    /* Forgets every link and empties the overlay, which stays attached
+    */
     items = [];
     if (overlay) overlay.innerHTML = "";
   }

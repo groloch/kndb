@@ -1,3 +1,7 @@
+"""The ASGI application: startup order, error shape, routers, static files.
+Run directly to serve it under uvicorn on the configured host and port
+"""
+
 import os
 from contextlib import asynccontextmanager
 
@@ -19,6 +23,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """Startup and shutdown, each in the order the rest of the app assumes.
+    Directories, then the tables, then the migration that needs them, then the
+    identity every unauthenticated write is attributed to.
+    On the way out the HTTP clients close before the database, so nothing is
+    still writing when the pool goes
+    """
     store.ensure_dirs()
     await db.init_db()
     await migrations.run()
@@ -34,6 +44,9 @@ app = FastAPI(title="KNDB", lifespan=lifespan)
 
 @app.exception_handler(HTTPException)
 async def _http_error_handler(_req, exc: HTTPException):
+    """Every raised ``HTTPException`` in the ``{ok, error}`` shape the front
+    end reads, rather than FastAPI's ``{detail}``
+    """
     return JSONResponse(
         status_code=exc.status_code,
         content={"ok": False, "error": exc.detail},
@@ -41,6 +54,9 @@ async def _http_error_handler(_req, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def _unhandled_error_handler(_req, exc: Exception):
+    """The same shape for anything unforeseen, so a bug reaches the browser as
+    a message it can show and not as a stack trace page
+    """
     return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
@@ -54,8 +70,10 @@ app.include_router(transfer_routes.router)
 app.include_router(pages_routes.router)
 
 class RevalidatingStatic(StaticFiles):
-    """Nothing here is fingerprinted, so a cached page script outlives the page
-    that agrees with it. Revalidating every asset costs a 304 apiece."""
+    """The static mount, every asset revalidated instead of trusted.
+    Nothing here is fingerprinted, so a cached page script outlives the page
+    that agrees with it, and revalidating costs a 304 apiece
+    """
 
     def file_response(self, *args, **kwargs):
         resp = super().file_response(*args, **kwargs)

@@ -1,10 +1,12 @@
 "use strict";
 
-/* Project workspace. Its Library tab is the same page as the personal
- * workspace, drawn by library.js; what is left here is what a project adds to
- * it — several note pages per source, blame, transfers — plus the tabs around
- * it. Shared helpers ($, api, toast, renderMarkdown, blame…) come from
- * common.js. */
+/* The project workspace page.
+ *
+ * Its Library tab is the personal workspace page, drawn by library.js. What
+ * lives here is what a project adds to it — several note pages per source,
+ * blame, transfers — plus the tabs around it. Shared helpers ($, api, toast,
+ * renderMarkdown, blame…) come from common.js
+ */
 
 // project id comes from the URL /projects/<pid>
 const PID = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");
@@ -23,10 +25,10 @@ const S = {
   note: null,        // the loaded page {id, content, blame, version…}
 };
 
-
-/* ---------- Tab switching ---------- */
-
 function switchTab(tab) {
+  /* Shows one subtab, hides the others.
+  * The blame gutter can only be measured while its tab is visible
+  */
   $$(".subtab").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   ["overview", "library", "latex", "settings"].forEach(t => {
     $("#tab-" + t).classList.toggle("hidden", t !== tab);
@@ -44,12 +46,10 @@ document.addEventListener("click", e => {
   }
 });
 
-
-/* ---------- The library page ---------- */
-
-/* Projects open a note in edit mode: the blame gutter is line-exact and
- * therefore only drawn over the textarea, and knowing who wrote what is the
- * point of reading someone else's page. Ctrl+D still flips to the preview. */
+/* Projects open a note in edit mode: the blame gutter is line-exact and only
+ * drawn over the textarea, and knowing who wrote what is the point of reading
+ * someone else's page. Ctrl+D still flips to the preview
+ */
 
 const LIB = makeLibrary({
   projectId: () => PID,
@@ -143,10 +143,10 @@ const LIB = makeLibrary({
   onNoteMode: () => scheduleGutter(),
 });
 
-
-/* ---------- Load ---------- */
-
 async function loadProject() {
+  /* Boots the page: project, role and capabilities, then the library.
+  * Bounces back to /projects when the project cannot be opened
+  */
   await initIdentity();
   let p;
   try {
@@ -176,7 +176,6 @@ async function loadProject() {
 
 const refreshTree = () => LIB.refreshTree();
 
-
 $("#btn-edit-tags").addEventListener("click", () => {
   const sel = LIB.sel;
   const src = sel && sel.kind === "source" ? S.rows.find(s => s.id === sel.id) : null;
@@ -189,12 +188,10 @@ $("#btn-edit-tags").addEventListener("click", () => {
   });
 });
 
-
-/* ---------- Note pages ---------- */
-
-/** The pages written on one source, as tabs above the editor. Returns the page
- *  the library should open, if there is one. */
 async function loadPages(sid) {
+  /* Pages written on one source, as tabs above the editor.
+  * Returns the page the library should open, null when there is none
+  */
   const d = await api("/api/projects/" + PID + "/sources/" + sid + "/notes");
   S.pages = d.notes;
   S.caps = d.capabilities || S.caps;
@@ -213,6 +210,10 @@ async function loadPages(sid) {
 }
 
 function renderNoteTabs() {
+  /* Redraws the page tabs above the editor.
+  * Hidden when something other than a source is selected, but not when
+  * nothing is selected at all
+  */
   const bar = $("#note-tabs");
   const sel = LIB.sel;
   if (sel && sel.kind !== "source") { bar.classList.add("hidden"); return; }
@@ -261,9 +262,10 @@ function canRename(page) {
     || KNDB.may(S.role, "edit_others"));
 }
 
-/** Rename a page from its tab. A modal for a two-word title was more ceremony
- *  than the act deserves, and the tab is where the name already is. */
 function startRename(tab) {
+  /* Renames a page in place, from its tab.
+  * Enter and blur commit, Escape and a failed save put the old name back
+  */
   const page = S.pages.find(p => p.id === tab.dataset.id);
   const el = $(".note-tab-name", tab);
   if (!page || !el || el.isContentEditable || !canRename(page)) return;
@@ -302,6 +304,9 @@ function startRename(tab) {
 }
 
 async function deletePage(nid) {
+  /* Deletes a note page, of a source or standalone, after confirmation.
+  * Leaves the library on a selection that still exists
+  */
   const page = S.pages.find(p => p.id === nid)
     || S.standalone.find(n => n.id === nid);
   if (!await confirmModal({
@@ -328,6 +333,9 @@ async function deletePage(nid) {
 }
 
 async function newPage() {
+  /* Creates a note page on the selected source, and opens it.
+  * Does nothing unless a source is selected
+  */
   const sel = LIB.sel;
   if (!sel || sel.kind !== "source") return;
   const src = S.rows.find(s => s.id === sel.id);
@@ -349,8 +357,10 @@ async function newPage() {
   } catch (e) { toast(e.message, "err"); }
 }
 
-/** Fetch one page into the editor. The library takes it from there. */
 async function loadNote(nid) {
+  /* Fetches one page into the editor, null when it cannot be loaded.
+  * The editor turns read-only when the server refuses edits
+  */
   try {
     const d = await api("/api/notes/" + nid);
     S.note = d.note;
@@ -367,6 +377,9 @@ async function loadNote(nid) {
 }
 
 function renderBlameLegend(show) {
+  /* Color key of the page's authors.
+  * Hidden when blame is off, or when nobody is attributed
+  */
   const el = $("#blame-legend");
   if (!show || !S.note) { el.classList.add("hidden"); return; }
   const authors = [...new Set((S.note.blame || []).map(r => r.author).filter(Boolean))];
@@ -381,18 +394,18 @@ $("#note-editor").addEventListener("input", scheduleGutter);
 $("#note-editor").addEventListener("scroll", syncGutterScroll);
 window.addEventListener("resize", scheduleGutter);
 
-
-/* ---------- Blame gutter ---------- */
-
 let _gutterTimer;
 function scheduleGutter() {
+  /* Coalesces bursts of gutter redraws
+  */
   clearTimeout(_gutterTimer);
   _gutterTimer = setTimeout(renderGutter, 60);
 }
 
-/** Per-line pixel heights, measured through a mirror element so that wrapped
- *  lines line up with their blame stripe instead of drifting down the page. */
 function measureLines(text) {
+  /* Pixel height of every line, measured through a mirror of the editor.
+  * A wrapped line is taller than one line, and its stripe has to follow
+  */
   const ta = $("#note-editor");
   const mirror = $("#note-mirror");
   const cs = getComputedStyle(ta);
@@ -414,6 +427,9 @@ function measureLines(text) {
 }
 
 function renderGutter() {
+  /* Draws the blame stripes beside the editor.
+  * Line-exact, so nothing is drawn while the textarea is hidden
+  */
   const gutter = $("#blame-gutter");
   const ta = $("#note-editor");
   const on = S.note && S.caps.show_blame !== false && !ta.classList.contains("hidden");
@@ -451,13 +467,12 @@ function renderGutter() {
 }
 
 function syncGutterScroll() {
+  /* Follows the editor scroll: shifts the blame track
+  */
   const track = $("#blame-gutter .blame-track");
   if (!track) return;
   track.style.transform = "translateY(" + -$("#note-editor").scrollTop + "px)";
 }
-
-
-/* ---------- Import & sources ---------- */
 
 $("#btn-import").addEventListener("click", () => {
   $("#imp-url").value = ""; $("#imp-file").value = "";
@@ -492,6 +507,9 @@ $("#imp-submit").addEventListener("click", async () => {
 });
 
 async function removeSource(sid) {
+  /* Removes a source from the project, after confirmation.
+  * The note pages written here go with it, the document itself is kept
+  */
   const s = S.rows.find(x => x.id === sid);
   if (!await confirmModal({
     title: "Remove from project",
@@ -509,11 +527,10 @@ async function removeSource(sid) {
   } catch (e) { toast(e.message, "err"); }
 }
 
-
-
-/* ---------- Transfers ---------- */
-
 function currentSelectionText() {
+  /* Selected text, taken from the editor when it is on screen, from the page
+  * otherwise
+  */
   const ta = $("#note-editor");
   if (!ta.classList.contains("hidden") && ta.selectionStart !== ta.selectionEnd) {
     return ta.value.slice(ta.selectionStart, ta.selectionEnd);
@@ -589,10 +606,9 @@ $("#btn-import-notes").addEventListener("click", async () => {
   };
 });
 
-
-/* ---------- Overview ---------- */
-
 function renderOverview() {
+  /* Fills the Overview tab from the loaded project
+  */
   const p = S.project;
   if (!p) return;
   $("#ov-name").textContent = p.name;
@@ -607,6 +623,8 @@ function renderOverview() {
 }
 
 function renderOverviewSources() {
+  /* First five sources, then a count of the rest
+  */
   const el = $("#ov-src");
   el.innerHTML = "";
   if (!S.rows.length) {
@@ -630,6 +648,8 @@ function renderOverviewSources() {
 }
 
 function renderOverviewMembers() {
+  /* Every member, with their color and their role
+  */
   const el = $("#ov-mem");
   const p = S.project;
   el.innerHTML = "";
@@ -649,9 +669,6 @@ function renderOverviewMembers() {
   }
 }
 
-
-/* ---------- LaTeX (local placeholder) ---------- */
-
 function texKey() { return "kndb.tex." + PID; }
 function loadTexDraft() { $("#tex-editor").value = localStorage.getItem(texKey()) || ""; }
 
@@ -664,10 +681,9 @@ $("#tex-editor").addEventListener("input", () => {
   }, 600);
 });
 
-
-/* ---------- Settings ---------- */
-
 function renderSettings() {
+  /* Fills the Settings tab from the loaded project
+  */
   const p = S.project;
   if (!p) return;
   $("#set-name").value = p.name || "";
@@ -682,6 +698,9 @@ function roleOption(role, selected) {
 }
 
 function renderMembers() {
+  /* Member rows of the Settings tab.
+  * A role change or a removal is saved at once, there is no save button
+  */
   const el = $("#prj-members");
   const p = S.project;
   if (!p) return;
@@ -800,10 +819,10 @@ $("#btn-add-member").addEventListener("click", async () => {
   } catch (e) { toast(e.message, "err"); }
 });
 
-
-/* ---------- Add existing sources from the workspace ---------- */
-
 async function openAddSources() {
+  /* Modal listing the workspace sources this project does not have yet.
+  * The workspace is fetched once, then filtered in place
+  */
   if (!S.workspace.length) {
     try { S.workspace = (await api("/api/sources")).sources; }
     catch (e) { toast("Could not load your workspace: " + e.message, "err"); return; }
@@ -851,9 +870,6 @@ $("#add-src-submit").addEventListener("click", async () => {
     await refreshTree();
   } catch (e) { toast("Add failed: " + e.message, "err"); }
 });
-
-
-/* ---------- Init ---------- */
 
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-close]");

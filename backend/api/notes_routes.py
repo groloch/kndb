@@ -1,3 +1,8 @@
+"""Note pages, attached to a source or standing alone in a folder.
+Every route here answers to a project's roles, and what a page holds is owned
+line by line: writing over someone else's lines needs a maintaining role
+"""
+
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +19,10 @@ router = APIRouter()
 
 @router.get("/api/projects/{pid}/sources/{sid}/notes")
 async def list_source_notes(pid: str, sid: str, user: str = Depends(current_user)):
+    """The source's pages, the project's capabilities and its author colors.
+    A workspace kept to one page per source has that page created here, on the
+    first read, so the reader never lands on nothing
+    """
     await get_project_or_404(pid)
     await require_role(pid, user)
     caps = await projects.get_capabilities(pid)
@@ -28,6 +37,9 @@ async def list_source_notes(pid: str, sid: str, user: str = Depends(current_user
 @router.get("/api/projects/{pid}/notes")
 async def list_standalone_notes(pid: str, folder: Optional[str] = None,
                                 user: str = Depends(current_user)):
+    """The project's pages that hang off no source, one folder at a time when
+    folder is given
+    """
     await get_project_or_404(pid)
     await require_role(pid, user)
     return {"ok": True, "notes": await notes.list_standalone(pid, folder)}
@@ -35,6 +47,10 @@ async def list_standalone_notes(pid: str, folder: Optional[str] = None,
 @router.post("/api/projects/{pid}/notes")
 async def create_note(pid: str, body: Optional[dict] = None,
                       user: str = Depends(current_user)):
+    """The new page, standalone unless a source of this project is named.
+    Needs a writing role. A standalone page needs a name, and a workspace kept
+    to one page per source refuses a second one with 409
+    """
     body = body or {}
     await writable_project(pid, user)
     caps = await projects.get_capabilities(pid)
@@ -58,6 +74,10 @@ async def create_note(pid: str, body: Optional[dict] = None,
 
 @router.get("/api/notes/{nid}")
 async def read_note(nid: str, user: str = Depends(current_user)):
+    """The page and what this reader may do to it, so the editor can grey out
+    what it would refuse anyway.
+    Readable by any member
+    """
     page = await get_note_or_404(nid)
     role = await require_role(page["project_id"], user)
     caps = await projects.get_capabilities(page["project_id"])
@@ -71,6 +91,10 @@ async def read_note(nid: str, user: str = Depends(current_user)):
 @router.put("/api/notes/{nid}")
 async def save_note(nid: str, body: Optional[dict] = None,
                     user: str = Depends(current_user)):
+    """The saved page, with its new version.
+    Needs a writing role. 409 when someone else saved since base_version, 403
+    when the edit reaches lines another author owns
+    """
     body = body or {}
     page = await get_note_or_404(nid)
     role = await require_role(page["project_id"], user, *WRITE)
@@ -89,6 +113,9 @@ async def save_note(nid: str, body: Optional[dict] = None,
 @router.patch("/api/notes/{nid}")
 async def patch_note(nid: str, body: Optional[dict] = None,
                      user: str = Depends(current_user)):
+    """The page after a rename, a move to another folder or a reposition.
+    Its creator may do so, anybody else needs a maintaining role
+    """
     body = body or {}
     page = await get_note_or_404(nid)
     role = await require_role(page["project_id"], user, *WRITE)
@@ -100,6 +127,11 @@ async def patch_note(nid: str, body: Optional[dict] = None,
 
 @router.delete("/api/notes/{nid}")
 async def delete_note(nid: str, user: str = Depends(current_user)):
+    """Removes a page, to a maintaining role and only when every line of it is
+    the caller's own.
+    Where the workspace keeps one page per source, a page attached to one
+    cannot go at all
+    """
     page = await get_note_or_404(nid)
     role = await require_role(page["project_id"], user)
     why = notes.deletable_by(page, user, role)

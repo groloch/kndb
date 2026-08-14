@@ -1,3 +1,8 @@
+"""Quizzes and summaries, the two things the model is asked to write.
+A quiz is private: it always lives in the caller's own workspace, so scores and
+questions never leak between members of a shared project
+"""
+
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,11 +20,18 @@ router = APIRouter()
 
 
 async def personal_pid(user: str = Depends(current_user)) -> str:
+    """The caller's own workspace, which is where every quiz below is kept
+    """
     return await projects.personal_project_id(user)
 
 @router.post("/api/quiz/{sid}/generate")
 async def quiz_generate(sid: str, body: Optional[dict] = None,
                         pid: str = Depends(personal_pid)):
+    """Writes a quiz from the caller's notes, the document, or both, and
+    streams the model's tokens as it goes.
+    Replaces whatever quiz the caller had on this source, and reports a
+    failure as a final error event rather than an HTTP status
+    """
     await get_source_or_404(sid)
     body = body or {}
     events = services.stream_quiz(
@@ -33,22 +45,34 @@ async def quiz_generate(sid: str, body: Optional[dict] = None,
 
 @router.get("/api/quiz/{sid}")
 async def quiz_get(sid: str, pid: str = Depends(personal_pid)):
+    """The caller's quiz on this source, an empty one when none was ever made
+    """
     await get_source_or_404(sid)
     return await quiz_store.read_quiz(pid, sid)
 
 @router.get("/api/quiz/{sid}/order")
 async def quiz_order(sid: str, pid: str = Depends(personal_pid)):
+    """The questions in the order to play them.
+    Whatever is due comes first, and within that the worst answered
+    """
     await get_source_or_404(sid)
     return {"ok": True, "questions": await services.quiz_order(pid, sid)}
 
 @router.get("/api/quiz/{sid}/stats")
 async def quiz_stats(sid: str, pid: str = Depends(personal_pid)):
+    """The caller's record on this source: counts, box and next review per
+    question, empty when nothing was ever played
+    """
     await get_source_or_404(sid)
     return {"ok": True, "stats": await quiz_store.read_stats(pid, sid)}
 
 @router.post("/api/quiz/{sid}/answer")
 async def quiz_record(sid: str, body: Optional[dict] = None,
                       pid: str = Depends(personal_pid)):
+    """The question's record after the answer.
+    Getting it right moves it a box up and pushes the next review further out,
+    getting it wrong drops it to the bottom box, due again straight away
+    """
     await get_source_or_404(sid)
     body = body or {}
     qid = body.get("question_id")
@@ -60,6 +84,10 @@ async def quiz_record(sid: str, body: Optional[dict] = None,
 @router.post("/api/quiz/{sid}/questions")
 async def quiz_question_add(sid: str, body: Optional[dict] = None,
                             pid: str = Depends(personal_pid)):
+    """A hand-written question, appended to the caller's quiz.
+    400 when the wording is empty, the answers too few or the right one out of
+    range
+    """
     await get_source_or_404(sid)
     body = body or {}
     try:
@@ -76,6 +104,9 @@ async def quiz_question_add(sid: str, body: Optional[dict] = None,
 @router.put("/api/quiz/{sid}/questions/{qid}")
 async def quiz_question_update(sid: str, qid: str, body: Optional[dict] = None,
                                pid: str = Depends(personal_pid)):
+    """The rewritten question, whichever of its fields the body carries.
+    Its record is left alone, so an edited question keeps the box it earned
+    """
     await get_source_or_404(sid)
     body = body or {}
     try:
@@ -94,6 +125,8 @@ async def quiz_question_update(sid: str, qid: str, body: Optional[dict] = None,
 @router.delete("/api/quiz/{sid}/questions/{qid}")
 async def quiz_question_delete(sid: str, qid: str,
                                pid: str = Depends(personal_pid)):
+    """Drops a question and the record it had, 404 when the quiz has no such id
+    """
     await get_source_or_404(sid)
     try:
         await services.delete_quiz_question(pid, sid, qid)
@@ -104,6 +137,10 @@ async def quiz_question_delete(sid: str, qid: str,
 @router.post("/api/summarize/{sid}")
 async def summarize(sid: str, body: Optional[dict] = None,
                     user: str = Depends(current_user)):
+    """Streams a summary of the document and appends it to a note page.
+    Unlike the quiz routes this one writes where the note lives, so it needs a
+    writing role in that project, and the page must be one of this very source
+    """
     await get_source_or_404(sid)
     body = body or {}
     nid = (body.get("note_id") or "").strip()

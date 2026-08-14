@@ -1,3 +1,10 @@
+"""An anchor ties a sentence of a note page to a passage of a document.
+It is an annotation, never an edit: nothing here writes to a note's content, so
+the blame gutter and the maintainer rule are untouched by linking. That is also
+why creating one is allowed to anyone who could edit the page, including on
+lines somebody else wrote
+"""
+
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,15 +18,10 @@ from backend.data import anchors, projects
 router = APIRouter()
 
 
-# An anchor ties a sentence of a note page to a passage of a document. It is an
-# annotation, never an edit: nothing here writes to a note's content, so the
-# blame gutter and the maintainer rule are untouched by linking. That is also
-# why creating one is allowed to anyone who could edit the page, including on
-# lines somebody else wrote.
-
-
 @router.get("/api/notes/{nid}/anchors")
 async def list_note_anchors(nid: str, user: str = Depends(current_user)):
+    """Every link made from one note page, to any member of its project
+    """
     page = await get_note_or_404(nid)
     await require_role(page["project_id"], user)
     return {"ok": True, "anchors": await anchors.list_for_note(nid)}
@@ -27,6 +29,8 @@ async def list_note_anchors(nid: str, user: str = Depends(current_user)):
 @router.get("/api/projects/{pid}/sources/{sid}/anchors")
 async def list_source_anchors(pid: str, sid: str,
                               user: str = Depends(current_user)):
+    """Every member's links onto one document, which is what draws the overlay
+    """
     await get_project_or_404(pid)
     await require_role(pid, user)
     return {"ok": True, "anchors": await anchors.list_for_source(pid, sid)}
@@ -34,6 +38,10 @@ async def list_source_anchors(pid: str, sid: str,
 @router.post("/api/notes/{nid}/anchors")
 async def create_anchor(nid: str, body: Optional[dict] = None,
                         user: str = Depends(current_user)):
+    """The new anchor, to anyone who may write in the project.
+    Defaults to the page's own source, and 400 on a locator that is malformed
+    or too large
+    """
     body = body or {}
     page = await get_note_or_404(nid)
     pid = page["project_id"]
@@ -61,6 +69,9 @@ async def create_anchor(nid: str, body: Optional[dict] = None,
 
 @router.delete("/api/anchor/{aid}")
 async def delete_anchor(aid: str, user: str = Depends(current_user)):
+    """Drops one link.
+    Its author may always do so, anybody else needs a maintaining role
+    """
     anchor = await anchors.get(aid)
     if not anchor:
         raise HTTPException(404, f"anchor {aid} not found")

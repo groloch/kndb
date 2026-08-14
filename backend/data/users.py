@@ -1,3 +1,8 @@
+"""User accounts.
+The name is the identity the rest of the backend keys on: note authorship,
+blame and project membership all store it as a plain string
+"""
+
 import time
 
 from sqlalchemy import select
@@ -18,6 +23,8 @@ def _to_dict(u: User) -> dict:
             "created_at": u.created_at or ""}
 
 async def get(name: str) -> dict | None:
+    """The user, None when the name is blank or unknown
+    """
     name = norm(name)
     if not name:
         return None
@@ -26,11 +33,17 @@ async def get(name: str) -> dict | None:
     return _to_dict(u) if u else None
 
 async def list_users() -> list:
+    """Every user, oldest first
+    """
     async with db.session() as s:
         us = (await s.execute(select(User).order_by(User.created_at))).scalars().all()
     return [_to_dict(u) for u in us]
 
 async def create(name: str, display_name: str = "") -> dict:
+    """Creates the user and their personal workspace, idempotently.
+    An existing user is returned untouched, display_name included.
+    Raises ValueError on a blank name
+    """
     name = norm(name)
     if not name:
         raise ValueError("user name required")
@@ -44,5 +57,8 @@ async def create(name: str, display_name: str = "") -> dict:
     return await get(name)
 
 async def ensure(name: str = "") -> dict:
+    """The named user, created on the spot when missing.
+    An empty name means the dev-mode default user
+    """
     name = norm(name) or projects.DEFAULT_USER
     return await get(name) or await create(name)

@@ -1,10 +1,14 @@
 "use strict";
 
-/* Project list page. Shared helpers come from common.js, which loads first. */
+/* Project list page. Shared helpers come from common.js, which loads first.
+ */
 
 const S = { projects: [] };
 
 async function refreshProjects() {
+  /* Reloads the list, filtered by the search box.
+  * Leaves what is on screen alone when the fetch fails
+  */
   const q = $("#prj-search").value.trim();
   try {
     const d = await api("/api/projects" + (q ? "?q=" + encodeURIComponent(q) : ""));
@@ -17,6 +21,8 @@ async function refreshProjects() {
 }
 
 function renderList() {
+  /* Draws one card per project, or the empty state
+  */
   const list = $("#prj-list");
   if (!S.projects.length) {
     list.className = "prj-list grid";

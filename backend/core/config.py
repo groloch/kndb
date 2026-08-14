@@ -1,3 +1,11 @@
+"""Every setting of the app, resolved once at import.
+A value is read from ``kndb.yaml`` beside the project — or from the file
+``KNDB_CONFIG`` names — deep merged over ``_DEFAULTS`` below, which is both
+the default of every key and the list of the keys that exist.
+No file at all leaves the defaults as they are, a malformed one exits, since
+a setting silently wrong is worse than a server that refuses to start
+"""
+
 import os
 from pathlib import Path
 
@@ -62,6 +70,10 @@ CAP_KEYS = ("allow_quiz", "multi_notes", "show_blame", "auto_import")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
+    """``override`` laid over ``base``, recursing into the nested mappings.
+    A list replaces rather than extends, so naming ``permissions.roles`` in
+    the file gives exactly those roles
+    """
     out = dict(base)
     for k, v in (override or {}).items():
         if isinstance(v, dict) and isinstance(base.get(k), dict):
@@ -71,6 +83,11 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return out
 
 def _load() -> dict:
+    """The config file merged over the defaults, ``_DEFAULTS`` when there is
+    no file.
+    That last case hands back ``_DEFAULTS`` itself, so nothing may mutate the
+    result
+    """
     merged = _DEFAULTS
     if CONFIG_PATH.exists():
         try:
@@ -91,11 +108,17 @@ def _fail(msg: str):
     raise SystemExit(f"kndb config error in {CONFIG_PATH}: {msg}")
 
 def _abs(path: str) -> str:
+    """A configured path made absolute.
+    A relative one is read against the project root, never the working
+    directory, so the server finds its data wherever it is launched from
+    """
     p = Path(path)
     return str(p if p.is_absolute() else (BASE_DIR / p))
 
 def _num(section: str, cast=int):
-    """A number named by its dotted key, so a typo says which line to fix."""
+    """The value under a dotted key, through ``cast``.
+    The key is quoted back on failure, so a typo says which line to fix
+    """
     node = _CONFIG
     for part in section.split("."):
         node = node[part]
@@ -105,16 +128,19 @@ def _num(section: str, cast=int):
         _fail(f"{section} must be a number, got {node!r}")
 
 def _strs(section: str, value) -> tuple:
+    """``value`` as a tuple of strings, or a startup error naming ``section``
+    """
     if not isinstance(value, (list, tuple)) or not all(
             isinstance(v, str) for v in value):
         _fail(f"{section} must be a list of strings")
     return tuple(value)
 
 def _grant(name: str) -> tuple:
-    """The roles allowed to perform one kind of action.
-
-    A grant naming a role that does not exist is a silent lockout — the check
-    would simply never pass — so it is a startup error instead."""
+    """The roles allowed to perform one kind of action, from
+    ``permissions.grants.<name>``.
+    A grant naming a role missing from ``permissions.roles`` is a silent
+    lockout, the check simply never passing, so it is a startup error instead
+    """
     roles = _strs(f"permissions.grants.{name}",
                   (_CONFIG["permissions"]["grants"] or {}).get(name))
     unknown = [r for r in roles if r not in ROLES]
@@ -124,8 +150,11 @@ def _grant(name: str) -> tuple:
     return roles
 
 def _caps(name: str) -> dict:
-    """Per-project switches. Their names are database columns, so an unknown
-    one is a typo that would otherwise be dropped without a word."""
+    """The switches a project of one kind is created with, every key of
+    ``CAP_KEYS`` present.
+    Their names are database columns, so an unknown one is a typo that would
+    otherwise be dropped without a word
+    """
     raw = _CONFIG["projects"][name] or {}
     unknown = set(raw) - set(CAP_KEYS)
     if unknown:
@@ -134,11 +163,15 @@ def _caps(name: str) -> dict:
     return {k: bool(raw.get(k, _DEFAULTS["projects"][name][k])) for k in CAP_KEYS}
 
 
+# What the rest of the app imports. Each one is the config key its section and
+# name spell out, defaulted by the matching entry of ``_DEFAULTS`` above, and
+# every check below happens at import so a bad file stops the boot.
 SERVER_HOST = str(_CONFIG["server"]["host"])
 SERVER_PORT = _num("server.port")
 DEBUG = bool(_CONFIG["server"]["debug"])
 
 DATA_DIR = _abs(str(_CONFIG["data"]["dir"]))
+# data.db_path when it is set, otherwise kndb.db inside data.dir.
 _db_path = _CONFIG["data"]["db_path"] or os.path.join(
     str(_CONFIG["data"]["dir"]), "kndb.db")
 DB_PATH = _abs(str(_db_path))

@@ -1,3 +1,8 @@
+"""Getting documents in, and serving them back out.
+A source is global — one blob, one row, however many projects link to it — so
+importing the same URL twice files the existing one instead of copying it
+"""
+
 import asyncio
 import os
 from typing import Optional
@@ -21,6 +26,9 @@ MAX_UPLOAD = config.UPLOAD_MAX_BYTES   # limits.upload_mb in kndb.yaml
 @router.get("/api/sources")
 async def list_sources(q: str = "", project: str = "",
                        user: str = Depends(current_user)):
+    """The sources of one project, the caller's own workspace by default.
+    q is the library search box: @tag, /project, anything else a title term
+    """
     pid = project or await projects.personal_project_id(user)
     return {"ok": True, "sources": await store.list_sources(q, pid=pid)}
 
@@ -28,6 +36,11 @@ async def list_sources(q: str = "", project: str = "",
 async def import_source(request: Request, url: str = Form(""),
                         file: Optional[UploadFile] = File(None),
                         project: str = Form(""), folder: str = Form("")):
+    """Files a document into a project, fetched from a URL or uploaded.
+    Needs a writing role there. An upload may only be .pdf or .md, while a URL
+    already in the library is filed again rather than fetched twice, and the
+    answer says so
+    """
     user = await current_user(request)
     url = (url or "").strip()
     if not url and file is None:
@@ -99,6 +112,10 @@ async def import_source(request: Request, url: str = Form(""),
             "source_type": info["source_type"], "project_id": pid}
 
 async def _file_into(pid: str, sid: str, user: str, folder: str) -> bool:
+    """Links a source into a project, false when it was already there.
+    Opens its note page when the project keeps one per source, and mirrors the
+    source into the caller's own workspace when they asked for that
+    """
     added = await projects.add_source(pid, sid, folder=folder, added_by=user)
     if added:
         caps = await projects.get_capabilities(pid)
@@ -109,6 +126,9 @@ async def _file_into(pid: str, sid: str, user: str, folder: str) -> bool:
 
 @router.get("/api/source/{sid}/content")
 async def source_content(sid: str):
+    """The stored document itself, typed from the kind it was imported as.
+    No role is asked for here: the id is the only key to a source
+    """
     row = await get_source_or_404(sid)
     mime = {
         "pdf": "application/pdf",
@@ -120,6 +140,10 @@ async def source_content(sid: str):
 
 @router.post("/api/source/{sid}/meta")
 async def source_meta(sid: str, body: Optional[dict] = None):
+    """Title and tags as they stand after the change.
+    Both are properties of the source itself, so the edit shows in every
+    project holding it
+    """
     row = await get_source_or_404(sid)
     body = body or {}
     fields = {k: str(body[k] or "").strip()
@@ -132,6 +156,10 @@ async def source_meta(sid: str, body: Optional[dict] = None):
 
 @router.delete("/api/source/{sid}")
 async def source_delete(sid: str):
+    """Deletes a source everywhere: the blob, its text sidecar, and its link
+    in every project that held it.
+    No role is asked for here either
+    """
     if not await store.get_source(sid):
         raise HTTPException(404, f"source {sid} not found")
     await store.delete_source(sid)
@@ -139,6 +167,9 @@ async def source_delete(sid: str):
 
 @router.get("/api/note/{sid}")
 async def get_note(sid: str, user: str = Depends(current_user)):
+    """The caller's own page on this source, created empty on first read.
+    Always the one page of their personal workspace, never a project's
+    """
     await get_source_or_404(sid)
     pid = await projects.personal_project_id(user)
     page = await notes.ensure_single(pid, sid, author=user)
@@ -148,6 +179,10 @@ async def get_note(sid: str, user: str = Depends(current_user)):
 @router.put("/api/note/{sid}")
 async def put_note(sid: str, body: Optional[dict] = None,
                    user: str = Depends(current_user)):
+    """Saves that same page, 409 when base_version is behind what is stored.
+    Written as the workspace owner, so the maintainer rule never bites: the
+    only author there is the caller
+    """
     await get_source_or_404(sid)
     body = body or {}
     content = body.get("content")
@@ -172,6 +207,8 @@ def _write_bytes(path: str, content: bytes) -> None:
         f.write(content)
 
 async def _write_upload(file: UploadFile, path: str) -> None:
+    """Streams an upload to disk a megabyte at a time, never holding it whole
+    """
     with open(path, "wb") as f:
         while chunk := await file.read(1024 * 1024):
             f.write(chunk)

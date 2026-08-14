@@ -1,3 +1,9 @@
+"""The OpenAI-compatible chat server the app talks to.
+One shared client, the retry policy, and the prompt loader — everything that
+knows about the model endpoint lives here.
+Failures come back as LLMError, whose message is meant to be shown as-is
+"""
+
 import asyncio
 import json
 import os
@@ -25,10 +31,15 @@ _last_error: str | None = None
 
 
 class LLMError(RuntimeError):
-    """LLM-side failure with user-actionable message."""
+    """LLM-side failure, carrying a message the user can act on
+    """
 
 
 def _make_client() -> httpx.AsyncClient:
+    """Client for the configured server.
+    No read timeout: a long generation is not a hung request, so only connect,
+    write and pool are bounded
+    """
     headers = {"Content-Type": "application/json"}
     if API_KEY:
         headers["Authorization"] = f"Bearer {API_KEY}"
@@ -46,12 +57,16 @@ def get_client() -> httpx.AsyncClient:
     return _client
 
 async def aclose() -> None:
+    """Drops the shared client, so the next call builds a fresh one
+    """
     global _client
     if _client is not None:
         await _client.aclose()
         _client = None
 
 def _llm_error(action: str, detail) -> LLMError:
+    """LLMError spelling out what failed and which kndb.yaml keys would fix it
+    """
     return LLMError(
         f"{action} — {detail}\n"
         "Set llm: base_url / api_key / model in kndb.yaml to point at an "
@@ -59,7 +74,11 @@ def _llm_error(action: str, detail) -> LLMError:
     )
 
 async def probe() -> bool:
-    """Reach the server and pick a usable model id."""
+    """Reaches the server and settles on a model id, False when it is down.
+    Never raises — the reason is kept in last_error for the status endpoint.
+    A server offering exactly one model overrides the configured id, so a
+    local server with one model loaded needs no configuring
+    """
     global _ready, _resolved_model, _last_error
     client = get_client()
     try:
@@ -84,6 +103,10 @@ async def probe() -> bool:
     return True
 
 async def is_loaded() -> bool:
+    """Whether the server is reachable, probing at most once per caller.
+    A failed probe is retried on the next call, a successful one is never
+    repeated
+    """
     global _ready
     if _ready is None:
         async with _probe_lock:
@@ -101,7 +124,9 @@ def model_display() -> str:
     return f"{_resolved_model} @ {BASE_URL}"
 
 def load_prompt(name: str, **kwargs) -> str:
-    """Read prompts/<name>.md and substitute {{placeholder}} values."""
+    """Reads prompts/<name>.md and substitutes {{placeholder}} values.
+    Placeholders with no matching keyword are left as they stand
+    """
     path = os.path.join(PROMPTS_DIR, name + ".md")
     with open(path, encoding="utf-8") as f:
         text = f.read()
@@ -118,10 +143,18 @@ def _messages(system: str, user: str) -> list:
     ]
 
 async def _backoff(attempt: int) -> None:
+    """Waits before a retry, doubling per attempt up to 8s
+    """
     await asyncio.sleep(min(0.4 * (2 ** attempt), 8.0))
 
 async def chat(system: str, user: str, max_tokens: int | None = None,
                temperature: float = 0.6) -> str:
+    """One completion, retried on transport errors and on 429/5xx.
+    Raises LLMError on an unreachable server, on a status that is not
+    retryable or has run out of retries, and on a reply that does not parse.
+    Nothing bounds the wait for tokens, so a slow generation blocks instead of
+    failing
+    """
     payload = {
         "model": _resolved_model,
         "messages": _messages(system, user),
@@ -157,6 +190,12 @@ async def chat(system: str, user: str, max_tokens: int | None = None,
 
 async def stream_chat(system: str, user: str, max_tokens: int | None = None,
                       temperature: float = 0.6):
+    """Same request, yielded token by token.
+    Retries like chat, but only until the first token — once the caller has
+    seen output a transport error raises LLMError rather than restarting the
+    answer from the top.
+    Unparseable SSE chunks are skipped rather than raised
+    """
     payload = {
         "model": _resolved_model,
         "messages": _messages(system, user),
@@ -208,6 +247,12 @@ async def stream_chat(system: str, user: str, max_tokens: int | None = None,
             raise
 
 def extract_json(text: str):
+    """The JSON value buried in the model's answer, code fences stripped.
+    Tries everything from the first bracket on, then the balanced span alone,
+    so trailing prose does not spoil it.
+    Raises ValueError when there is no bracket, or when neither candidate
+    parses
+    """
     text = re.sub(r"^```(?:json)?\s*", "", text.strip())
     text = re.sub(r"\s*```$", "", text)
     starts = [i for i in (text.find("["), text.find("{")) if i != -1]
@@ -222,6 +267,11 @@ def extract_json(text: str):
     raise ValueError("Model output was not valid JSON")
 
 def _scan_json(text: str, start: int) -> str:
+    """The balanced span opening at start, cut short at the first bracket that
+    does not match.
+    Strings and their escapes are stepped over, so a bracket inside a quote
+    does not count
+    """
     stack = []
     pairs = {"[": "]", "{": "}"}
     closing = {"]": "[", "}": "{"}
@@ -250,6 +300,11 @@ def _scan_json(text: str, start: int) -> str:
     return text[start:]
 
 async def html_to_markdown(content: str) -> str:
+    """Markdown for a page whose own text is too thin to keep.
+    The input is truncated to config.WEB_MD_CHARS here, so the caller need not.
+    Raises LLMError like any other chat call, which the fetcher reads as "no
+    markdown" and falls back
+    """
     system = load_prompt("web_to_markdown")
     user = ("Raw website content:\n=====\n"
             + str(content)[:config.WEB_MD_CHARS] + "\n=====")
