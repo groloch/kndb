@@ -17,6 +17,8 @@ scientific papers, websites and blog posts, links markdown notes to each source,
 ## Quick start
 
 ```bash
+# 0. Edit the kndb.yaml file to configure the app as you wish
+
 # 1. create the virtualenv (once)
 python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt
