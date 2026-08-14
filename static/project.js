@@ -91,6 +91,10 @@ const LIB = makeLibrary({
   loadNotes: s => loadPages(s.id),
   loadNote,
 
+  // The summary is written into the open page as the caller, so a read-only
+  // project — or someone else's page they may not touch — has nothing to offer.
+  canSummarize: () => !S.readOnly && S.canEdit !== false,
+
   persist: async (content, nid) => {
     const d = await api("/api/notes/" + nid, {
       method: "PUT",
@@ -243,6 +247,9 @@ function renderNoteTabs() {
 }
 
 $("#note-tabs").addEventListener("click", async e => {
+  // The tabs are the one way to change page without going through the tree, so
+  // they answer to the summary stream themselves.
+  if (LIB.busy()) return;
   const del = e.target.closest("[data-delpage]");
   if (del) { e.stopPropagation(); return deletePage(del.dataset.delpage); }
   if (e.target.closest("#note-tab-add")) return newPage();
@@ -369,6 +376,14 @@ async function loadNote(nid) {
     $("#note-editor").value = S.note.content;
     $("#note-editor").readOnly = !d.can_edit;
     renderBlameLegend(d.show_blame);
+    // Text written into the page while it was closed — an appended summary, an
+    // imported snippet — can change who holds a line in it, and that is what
+    // decides whether its tab offers a delete button.
+    const page = S.pages.find(p => p.id === nid);
+    if (page && String(page.authors) !== String(S.note.authors)) {
+      page.authors = S.note.authors;
+      renderNoteTabs();
+    }
     return S.note;
   } catch (e) {
     toast("Failed to load the note: " + e.message, "err");
@@ -568,6 +583,7 @@ $("#btn-send").addEventListener("click", async () => {
 });
 
 $("#btn-import-notes").addEventListener("click", async () => {
+  if (LIB.busy()) return;      // importing a page reloads the one being written into
   const sel = LIB.sel;
   if (!sel || sel.kind !== "source") {
     toast("Select a source first", "warn"); return;

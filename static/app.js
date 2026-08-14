@@ -1,66 +1,21 @@
 "use strict";
 
-/* Personal workspace. The library page itself — tree, viewers, note editor —
- * is library.js, shared with the project pages.
- * What is left here is what only the workspace does: importing, summarizing,
- * and the quiz.
+/* Personal workspace. The library page itself — tree, viewers, note editor,
+ * summarize — is library.js, shared with the project pages.
+ * What is left here is what only the workspace does: importing and the quiz.
  *
- * $, api, toast, renderMarkdown, modals and the identity header live in
- * common.js, which must load first.
+ * $, api, toast, renderMarkdown, streamSSE, modals and the identity header live
+ * in common.js, which must load first.
  */
 
 const S = {
   pid: "",            // the workspace is a project like any other
   noteVersion: 1,
-  streaming: false,
   quiz: null,          // quiz hub: the loaded quiz
   quizStats: null,     // quiz hub: its spaced-repetition stats
   qm: null,
   qmEditId: null,
 };
-
-function streamSSE(path, body, onToken) {
-  /* POSTs a request and reads back the server's token stream.
-  * Resolves with the final event, rejects on an error event or on a stream
-  * that ends without one
-  */
-  return new Promise((resolve, reject) => {
-    fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then(async res => {
-      if (!res.ok || !res.body) {
-        let data = null;
-        try { data = await res.json(); } catch (_) {}
-        reject(new Error((data && data.error) || `HTTP ${res.status}`));
-        return;
-      }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf("\n\n")) >= 0) {
-          const block = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          for (const line of block.split("\n")) {
-            if (!line.startsWith("data:")) continue;
-            let ev;
-            try { ev = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
-            if (ev.type === "token" && onToken) onToken(ev.text || "");
-            if (ev.type === "error") { reject(new Error(ev.error || "LLM task failed")); return; }
-            if (ev.type === "done") { resolve(ev); return; }
-          }
-        }
-      }
-      reject(new Error("LLM stream ended without a result"));
-    }).catch(reject);
-  });
-}
 
 function setBusy(btn, busy, label) {
   /* Disables a button under a temporary label, restores its own on release
@@ -98,15 +53,6 @@ const LIB = makeLibrary({
     // drawn in the "someone else" grey.
     colors: () => Object.fromEntries(
       ((KNDB.personal && KNDB.personal.members) || []).map(m => [m.name, m.color])),
-  },
-
-  canSelect: () => {
-    /* Nothing may move while a summary is streaming into the note it would
-    * leave
-    */
-    if (!S.streaming) return true;
-    toast("Wait for the summary to finish first", "warn");
-    return false;
   },
 
   loadNotes: async s => {
@@ -161,11 +107,11 @@ const LIB = makeLibrary({
   },
 
   onSelect: ref => {
-    /* Tags, quiz and summary act on a source, on nothing else
+    /* Tags and quiz act on a source, on nothing else — Summarize is the
+    * library's own, enabled with the note it writes into
     */
     const src = !!ref && ref.kind === "source";
-    ["btn-edit-tags", "btn-quiz", "btn-summarize"]
-      .forEach(id => { $(`#${id}`).disabled = !src; });
+    ["btn-edit-tags", "btn-quiz"].forEach(id => { $(`#${id}`).disabled = !src; });
   },
 
   searchPredicate: async (q, local) => {
@@ -411,61 +357,6 @@ $("#quiz-gen-submit").addEventListener("click", async () => {
     toast("Quiz generation failed: " + e.message, "err", 10000);
   } finally {
     setBusy(btn, false, "Generate");
-  }
-});
-
-$("#btn-summarize").addEventListener("click", () => openModal("#modal-summarize"));
-
-$("#summarize-submit").addEventListener("click", async () => {
-  const source = LIB.source;
-  if (!source) return;
-  if (S.streaming) { toast("Already summarizing…", "warn"); return; }
-  closeModal("#modal-summarize");
-
-  await LIB.flushNote();   // the summary is appended server-side, under what is saved there
-  // The summary is written into a specific note page, so send its id — the
-  // server no longer has a notion of "the" note for a source.
-  const body = {
-    length: $("#su-length").value,
-    language: $("#su-language").value.trim() || "English",
-    note_id: LIB.noteId,
-  };
-  const editor = $("#note-editor");
-
-  // Turn on notes preview and lock editing while the summary streams in.
-  S.streaming = true;
-  LIB.state.noteMode = "preview";
-  LIB.applyNoteMode();
-  editor.disabled = true;
-  LIB.setSaveState("summarizing…");
-
-  // What the note already holds stays on screen: the summary lands under it.
-  const before = editor.value.trim();
-  let summary = "";
-  const paint = () => {
-    const preview = $("#note-preview");
-    const text = summary ? `${before}\n\n${summary}`.trim() : before;
-    preview.innerHTML = renderMarkdown(text) || '<p class="muted">Summarizing…</p>';
-    preview.scrollTop = preview.scrollHeight;
-  };
-  paint();
-
-  try {
-    await streamSSE(`/api/summarize/${source.id}`, body, tok => {
-      summary += tok;
-      paint();
-    });
-    S.streaming = false;
-    // Pick up the finalized note (the summary is already written into it).
-    await LIB.selectSource(source.id);
-    toast("Summary appended to your note", "ok");
-  } catch (e) {
-    if (summary) paint();  // keep whatever streamed so far visible
-    toast("Summarize failed: " + e.message, "err", 10000);
-  } finally {
-    S.streaming = false;
-    editor.disabled = false;
-    LIB.setSaveState("");
   }
 });
 
@@ -821,11 +712,6 @@ async function init() {
     const srcId = decodeURIComponent(m[1]);
     if (LIB.state.sources.some(s => s.id === srcId)) await selectSource(srcId, "preview");
   }
-  api("/api/llm/status").then(d => {
-    const el = $("#llm-status");
-    el.textContent = d.loaded ? "LLM ready" : (d.last_error ? "LLM: offline" : "LLM: connecting…");
-    el.title = (d.last_error || d.model || "");
-  }).catch(() => {});
 }
 
 init();

@@ -70,6 +70,49 @@ async function api(path, opts = {}) {
   return data;
 }
 
+function streamSSE(path, body, onToken) {
+  /* POSTs a request and reads back the server's token stream.
+  * Resolves with the final event, rejects on an error event or on a stream
+  * that ends without one
+  */
+  return new Promise((resolve, reject) => {
+    fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(async res => {
+      if (!res.ok || !res.body) {
+        let data = null;
+        try { data = await res.json(); } catch (_) {}
+        reject(new Error((data && data.error) || `HTTP ${res.status}`));
+        return;
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const block = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          for (const line of block.split("\n")) {
+            if (!line.startsWith("data:")) continue;
+            let ev;
+            try { ev = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
+            if (ev.type === "token" && onToken) onToken(ev.text || "");
+            if (ev.type === "error") { reject(new Error(ev.error || "LLM task failed")); return; }
+            if (ev.type === "done") { resolve(ev); return; }
+          }
+        }
+      }
+      reject(new Error("LLM stream ended without a result"));
+    }).catch(reject);
+  });
+}
+
 let _toastTimer;
 function toast(msg, kind = "info", ms = 4200) {
   /* Flashes a message in the page's toast strip.

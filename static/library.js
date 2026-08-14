@@ -19,7 +19,7 @@
  *
  *   onTree:     t => …,             // the /tree payload, for what the page keeps too
  *   onSelect:   ref => …,           // panes are filled: enable the page's buttons
- *   canSelect:  () => bool,         // veto a change of selection (mid-summary…)
+ *   canSummarize: () => bool,       // false where the page forbids writing
  *
  *   loadNotes:  async source => note|null,  // the note pane beside a document
  *   loadNote:   async nid => note|null,     // one page, into #note-editor
@@ -45,6 +45,7 @@ function makeLibrary(cfg) {
     noteName: "",
     noteMode: cfg.noteMode || "preview",
     noteDirty: false,
+    streaming: false,   // a summary is being written into the open note
     saveTimer: null,
     compileTimer: null,
   };
@@ -91,7 +92,7 @@ function makeLibrary(cfg) {
     * import that just finished, a link followed from somewhere else.
     * A null ref closes the current one
     */
-    if (cfg.canSelect && !cfg.canSelect()) return;
+    if (busy()) return;
     await flushNote();
     L.sel = ref;
     // Closing is about the selection, not about having a document: a folder and
@@ -243,6 +244,7 @@ function makeLibrary(cfg) {
     L.noteDirty = false;
     setSaveState("");
     applyNoteMode();
+    updateSummarize();
     // Nothing to anchor without a note, and the doc surface has to let go of a
     // viewer that is about to hold something else.
     if (note) await ANCHORS.load(); else ANCHORS.clear();
@@ -339,10 +341,95 @@ function makeLibrary(cfg) {
       // Swallowed either way, so the browser keeps its bookmark dialog out of
       // the way of a shortcut this page claims.
       e.preventDefault();
-      if (cfg.canSelect && !cfg.canSelect()) return;
+      if (busy()) return;
       toggleNoteMode();
     }
   });
+
+  /* Summarizing is note-writing, not reading: the model's text is appended to
+   * the page the editor has open, wherever that page lives. A workspace has one
+   * page per source, a project as many as its members wrote — either way the
+   * summary lands in the one on screen, and the server checks the role of the
+   * project holding it.
+   */
+
+  function busy() {
+    /* Whether the note is off limits because a summary is streaming into it
+    */
+    if (!L.streaming) return false;
+    toast("Wait for the summary to finish first", "warn");
+    return true;
+  }
+
+  function updateSummarize() {
+    /* There is something to summarize only with a document on screen and a
+    * page to write into
+    */
+    const btn = $("#btn-summarize");
+    if (!btn) return;
+    btn.disabled = L.streaming || !L.noteId
+      || !L.sel || L.sel.kind !== "source"
+      || (cfg.canSummarize ? !cfg.canSummarize() : false);
+  }
+
+  async function summarize() {
+    /* Streams a summary of the document into the open note page.
+    * The note is read-only while it runs: the server appends to what it holds,
+    * so an edit made meanwhile would be written over
+    */
+    const source = L.source, nid = L.noteId;
+    if (!source || !nid || L.streaming) return;
+    closeModal("#modal-summarize");
+    await flushNote();     // the summary is appended under what is saved there
+
+    const body = {
+      length: $("#su-length").value,
+      language: $("#su-language").value.trim() || "English",
+      note_id: nid,
+    };
+    const editor = $("#note-editor");
+    L.streaming = true;
+    L.noteMode = "preview";
+    applyNoteMode();
+    updateSummarize();
+    editor.disabled = true;
+    setSaveState("summarizing…");
+
+    // What the note already holds stays on screen: the summary lands under it.
+    const before = editor.value.trim();
+    let summary = "";
+    const paint = () => {
+      const preview = $("#note-preview");
+      const text = summary ? `${before}\n\n${summary}`.trim() : before;
+      preview.innerHTML = renderMarkdown(text) || '<p class="muted">Summarizing…</p>';
+      preview.scrollTop = preview.scrollHeight;
+    };
+    paint();
+
+    try {
+      await streamSSE(`/api/summarize/${source.id}`, body, tok => {
+        summary += tok;
+        paint();
+      });
+      L.streaming = false;
+      // Pick up the finalized page — the summary is already written into it.
+      await adoptNote(cfg.loadNote ? await cfg.loadNote(nid) : null);
+      toast("Summary appended to your note", "ok");
+    } catch (e) {
+      if (summary) paint();   // keep whatever streamed so far visible
+      toast("Summarize failed: " + e.message, "err", 10000);
+    } finally {
+      L.streaming = false;
+      editor.disabled = false;
+      setSaveState("");
+      updateSummarize();
+    }
+  }
+
+  if ($("#btn-summarize")) {
+    $("#btn-summarize").addEventListener("click", () => openModal("#modal-summarize"));
+    $("#summarize-submit").addEventListener("click", summarize);
+  }
 
   function docTarget() {
     /* What the viewer is showing, in the terms the anchoring module needs.
@@ -477,7 +564,7 @@ function makeLibrary(cfg) {
   }
 
   return {
-    state: L, TREE, ANCHORS,
+    state: L, TREE, ANCHORS, busy,
     start, refreshTree, select, selectSource, openRef, resetSelection,
     clearViewers, showCompiled, loadResource, recompileNote,
     adoptNote, flushNote, saveNote, setSaveState, applyNoteMode, setDirFolded,
