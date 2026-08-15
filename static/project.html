@@ -29,7 +29,7 @@
   <nav class="sub-tabs">
     <button class="subtab active" data-tab="overview">Overview</button>
     <button class="subtab" data-tab="library">Library</button>
-    <button class="subtab" data-tab="latex">LaTeX editor</button>
+    <button class="subtab" data-tab="agent">Agent</button>
     <button class="subtab" data-tab="settings">Settings</button>
   </nav>
   <span id="user-switch" class="user-switch"></span>
@@ -82,16 +82,41 @@
     {% include "templates/notes_editor.html" %}
   </div>
 
-  <!-- ======================= LATEX ======================= -->
-  <div id="tab-latex" class="tab-pane hidden">
-    <div class="pane-body">
-      <div class="pane-title">
-        <h2>LaTeX editor</h2>
-        <span class="muted">(placeholder — not synced)</span>
-      </div>
-      <p class="muted hint">Draft autosaved in this browser only. Nothing is sent to the server.</p>
-      <textarea id="tex-editor" class="input tex-editor mono" spellcheck="false"
-                placeholder="% This is a local, unsynced placeholder for the future collaborative LaTeX editor.&#10;% Your text is kept in this browser only (localStorage)."></textarea>
+  <!-- ======================= AGENT ======================= -->
+  <div id="tab-agent" class="tab-pane hidden">
+    <div class="agent-shell">
+      <section class="agent-chat" aria-label="Agent chat mockup">
+        <header class="agent-chat-head">
+          <div>
+            <h2>Project Agent</h2>
+          </div>
+        </header>
+
+        <div class="agent-thread" aria-label="Conversation">
+          <article class="agent-msg agent-msg-user">
+            <p>Example user message.</p>
+            <time>09:15</time>
+          </article>
+          <div class="agent-toolcall" role="note" aria-label="Tool call activity">
+            <span class="agent-toolcall-label">Tool Call</span>
+            <code>search_sources(query="transformer quantization")</code>
+          </div>
+          <article class="agent-msg agent-msg-ai">
+            <p>Example agent message.</p>
+            <time>09:14</time>
+          </article>
+        </div>
+
+        <footer class="agent-compose" aria-label="Message composer">
+          <label class="lbl" for="agent-draft">Message</label>
+          <div class="agent-compose-row">
+            <input id="agent-draft" class="input" type="text" placeholder="Type a message..." disabled>
+            <button class="btn primary" type="button" disabled>Send</button>
+          </div>
+        </footer>
+      </section>
+
+      <section class="agent-blank" aria-label="Reserved pane"></section>
     </div>
   </div>
 
@@ -232,5 +257,6 @@
 <script src="/static/tree.js"></script>
 <script src="/static/library.js"></script>
 <script src="/static/project.js"></script>
+<script src="/static/agent.js"></script>
 </body>
 </html>

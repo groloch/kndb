@@ -30,7 +30,7 @@ function switchTab(tab) {
   * The blame gutter can only be measured while its tab is visible
   */
   $$(".subtab").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
-  ["overview", "library", "latex", "settings"].forEach(t => {
+  ["overview", "library", "agent", "settings"].forEach(t => {
     $("#tab-" + t).classList.toggle("hidden", t !== tab);
   });
   if (tab === "library") scheduleGutter();
@@ -173,7 +173,6 @@ async function loadProject() {
   $$("#panel-dir .head-actions .btn").forEach(b => { b.disabled = S.readOnly; });
 
   renderSettings();
-  loadTexDraft();
   await LIB.start();
   renderOverview();
 }
@@ -684,18 +683,6 @@ function renderOverviewMembers() {
     el.appendChild(row);
   }
 }
-
-function texKey() { return "kndb.tex." + PID; }
-function loadTexDraft() { $("#tex-editor").value = localStorage.getItem(texKey()) || ""; }
-
-let _texTimer;
-$("#tex-editor").addEventListener("input", () => {
-  clearTimeout(_texTimer);
-  _texTimer = setTimeout(() => {
-    localStorage.setItem(texKey(), $("#tex-editor").value);
-    toast("Draft saved (browser only)", "ok", 1500);
-  }, 600);
-});
 
 function renderSettings() {
   /* Fills the Settings tab from the loaded project
