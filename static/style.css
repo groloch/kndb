@@ -983,35 +983,79 @@ body.linking-note .note-editor { cursor: crosshair; }
 }
 
 .agent-toolcall {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   margin: 2px 0;
-  padding: 7px 10px;
-  border: 1px dashed #c7cedf;
-  border-radius: 8px;
-  background: #f7f8fc;
+  max-width: 86%;
+  min-width: 0;
 }
 
-.agent-toolcall-label {
-  flex: 0 0 auto;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .35px;
-  text-transform: uppercase;
-  color: #4f5f84;
-  background: #e8ecf8;
-  border: 1px solid #d6deef;
-  border-radius: 999px;
-  padding: 2px 7px;
+.agent-toolcall-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
 }
 
-.agent-toolcall code {
-  font: 12px/1.35 ui-monospace, "Cascadia Code", Consolas, monospace;
-  color: #2f3648;
-  white-space: nowrap;
+.agent-toolcall-head:hover { color: var(--accent); }
+
+.agent-toolcall-caret {
+  font-size: 9px;
+  transform: rotate(90deg);
+  transition: transform .12s ease;
+}
+
+.agent-toolcall.collapsed .agent-toolcall-caret { transform: rotate(0deg); }
+
+.agent-toolcall-name {
+  font: 12px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.agent-toolcall-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 2px 12px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--border-strong);
+}
+
+.agent-toolcall.collapsed .agent-toolcall-body { display: none; }
+
+.agent-toolcall-args,
+.agent-toolcall-result {
+  margin: 0;
+  font: 11px/1.45 ui-monospace, "Cascadia Code", Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-toolcall-args { color: #2f3648; }
+
+.agent-toolcall-result {
+  max-height: 220px;
+  overflow: auto;
+  color: var(--muted);
+}
+
+.agent-msg-ai-trace {
+  margin: 2px 0;
+  padding: 4px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-style: italic;
+  cursor: pointer;
+}
+
+.agent-msg-ai-trace.collapsed p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .agent-compose {

@@ -147,6 +147,10 @@ const LIB = makeLibrary({
   onNoteMode: () => scheduleGutter(),
 });
 
+const AGENT = makeAgent({
+  projectId: () => PID
+});
+
 async function loadProject() {
   /* Boots the page: project, role and capabilities, then the library.
   * Bounces back to /projects when the project cannot be opened

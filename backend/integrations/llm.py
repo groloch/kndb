@@ -189,7 +189,7 @@ async def chat(system: str, user: str, max_tokens: int | None = None,
         return str(content or "").strip()
     raise _llm_error("LLM request failed after retries", last or "unknown error")
 
-async def stream_chat(system: str, user: str, max_tokens: int | None = None,
+async def stream_chat(chat: list[dict], max_tokens: int | None = None,
                       temperature: float = 0.6):
     """Same request, yielded token by token.
     Retries like chat, but only until the first token — once the caller has
@@ -200,7 +200,7 @@ async def stream_chat(system: str, user: str, max_tokens: int | None = None,
     global _last_error
     payload = {
         "model": _resolved_model,
-        "messages": _messages(system, user),
+        "messages": chat,
         "temperature": temperature,
         "stream": True,
     }

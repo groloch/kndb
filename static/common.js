@@ -75,6 +75,17 @@ function streamSSE(path, body, onToken) {
   * Resolves with the final event, rejects on an error event or on a stream
   * that ends without one
   */
+  return streamEvents(path, body, ev => {
+    if (ev.type === "token" && onToken) onToken(ev.text || "");
+  });
+}
+
+function streamEvents(path, body, onEvent) {
+  /* POSTs a request and reads back the server's SSE stream, handing every
+  * event to onEvent as it arrives.
+  * Resolves with the "done" event, rejects on an "error" one or on a stream
+  * that ends without either
+  */
   return new Promise((resolve, reject) => {
     fetch(path, {
       method: "POST",
@@ -102,7 +113,7 @@ function streamSSE(path, body, onToken) {
             if (!line.startsWith("data:")) continue;
             let ev;
             try { ev = JSON.parse(line.slice(5).trim()); } catch (_) { continue; }
-            if (ev.type === "token" && onToken) onToken(ev.text || "");
+            if (onEvent) onEvent(ev);
             if (ev.type === "error") { reject(new Error(ev.error || "LLM task failed")); return; }
             if (ev.type === "done") { resolve(ev); return; }
           }

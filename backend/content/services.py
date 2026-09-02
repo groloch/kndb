@@ -11,8 +11,9 @@ from datetime import datetime, timedelta, timezone
 
 from ..data import notes as note_store
 from ..data import quiz as quiz_store
-from ..data import store
+from ..data import store, projects
 from ..integrations import llm
+from ..content.agent import prepare_tools, parse_json_toolcall, parse_pythonic_toolcall
 
 
 _INTERVALS = [0, 1, 2, 4, 7, 15, 30, 60]
@@ -206,9 +207,12 @@ async def stream_quiz(pid: str, sid: str, scope: str = "both", num_questions: in
             document=doc[:9000] or "(no document text provided)",
         )
         text = ""
+        chat = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': "Generate the quiz based on the material above."}
+        ]
         async for token in llm.stream_chat(
-            system, "Generate the quiz based on the material above.",
-            max_tokens=2048, temperature=0.5,
+            chat, max_tokens=2048, temperature=0.5,
         ):
             text += token
             yield {"type": "token", "text": token}
@@ -399,8 +403,12 @@ async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
             "Write the summary now."
         )
         text = ""
+        chat = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user}
+        ]
         async for token in llm.stream_chat(
-            system, user, temperature=0.4,
+            chat, temperature=0.8,
         ):
             text += token
             yield {"type": "token", "text": token}
@@ -413,3 +421,72 @@ async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
         yield {"type": "done", "chars": len(summary)}
     except Exception as e:
         yield {"type": "error", "error": str(e)}
+
+async def stream_agent(pid: str, message: str):
+    project = await projects.get_project(pid)
+
+    tools, functions = prepare_tools(pid)
+
+    system = llm.load_prompt(
+        "project_agent",
+        project_name=project['name'],
+        project_description=project['description'],
+        tools=tools,
+    )
+
+    yield {"type": "token", "role": "user", "text": message}
+
+    chat = [
+        {'role': 'system', 'content': system},
+        {'role': 'user', 'content': message}
+    ]
+    while True:
+        in_reasoning = False
+        in_tool = False
+        current_tool_call = ''
+        current_assistant_trace = ''
+
+        async for token in llm.stream_chat(
+            chat, temperature=0.8
+        ):
+            current_assistant_trace += token
+            if token == '<think>':
+                in_reasoning = True
+                continue
+            elif token == '</think>':
+                in_reasoning = False
+                continue
+
+            if token == '<|tool_call_start|>':
+                in_tool = True
+                continue
+            elif token == '<|tool_call_end|>':
+                in_tool = False
+                continue
+
+            if in_tool:
+                current_tool_call += token
+            else:
+                role = "assistant" if not in_reasoning else "assistant-trace"
+                yield {"type": "token", "role": role, "text": token}
+        chat.append({
+            'role': 'assistant',
+            'content': current_assistant_trace
+        })
+        if len(current_tool_call.strip()) == 0:
+            break
+
+        tool, tool_args = parse_pythonic_toolcall(current_tool_call)
+        if tool not in functions:
+            tool_result = f'unknown tool: {tool}'
+        else:
+            tool_result = await functions[tool](**tool_args)
+        chat.append({
+            'role': 'tool',
+            'content': tool_result
+        })
+
+        yield {"type": "toolcall", "tool": tool, "args": tool_args,
+               "result": tool_result}
+
+    yield {"type": "done", "chars": 0}
