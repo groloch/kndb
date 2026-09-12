@@ -423,70 +423,86 @@ async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
         yield {"type": "error", "error": str(e)}
 
 async def stream_agent(pid: str, message: str):
-    project = await projects.get_project(pid)
+    """One agent run over a project, streamed as SSE events.
+    Ends on a "done" event, or a single "error" one like the other streams —
+    nothing raises out of the router. A tool call that fails to parse or names
+    no known tool comes back as a toolcall carrying the refusal, so the loop
+    can answer from it instead of dying
+    """
+    try:
+        project = await projects.get_project(pid)
+        if project is None:
+            raise ValueError("project not found")
 
-    tools, functions = prepare_tools(pid)
+        tools, functions = prepare_tools(pid)
 
-    system = llm.load_prompt(
-        "project_agent",
-        project_name=project['name'],
-        project_description=project['description'],
-        tools=tools,
-    )
+        system = llm.load_prompt(
+            "project_agent",
+            project_name=project['name'],
+            project_description=project['description'],
+            tools=tools,
+        )
 
-    yield {"type": "token", "role": "user", "text": message}
+        yield {"type": "token", "role": "user", "text": message}
 
-    chat = [
-        {'role': 'system', 'content': system},
-        {'role': 'user', 'content': message}
-    ]
-    while True:
-        in_reasoning = False
-        in_tool = False
-        current_tool_call = ''
-        current_assistant_trace = ''
+        chat = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': message}
+        ]
+        while True:
+            in_reasoning = False
+            in_tool = False
+            current_tool_call = ''
+            current_assistant_trace = ''
 
-        async for token in llm.stream_chat(
-            chat, temperature=0.8
-        ):
-            current_assistant_trace += token
-            if token == '<think>':
-                in_reasoning = True
-                continue
-            elif token == '</think>':
-                in_reasoning = False
-                continue
+            async for token in llm.stream_chat(
+                chat, temperature=0.8
+            ):
+                current_assistant_trace += token
+                if token == '<thinking>':
+                    in_reasoning = True
+                    continue
+                elif token == '</thinking>':
+                    in_reasoning = False
+                    continue
 
-            if token == '<|tool_call_start|>':
-                in_tool = True
-                continue
-            elif token == '<|tool_call_end|>':
-                in_tool = False
-                continue
+                if token == '<|tool_call_start|>':
+                    in_tool = True
+                    continue
+                elif token == '<|tool_call_end|>':
+                    in_tool = False
+                    continue
 
-            if in_tool:
-                current_tool_call += token
+                if in_tool:
+                    current_tool_call += token
+                else:
+                    role = "assistant" if not in_reasoning else "assistant-trace"
+                    yield {"type": "token", "role": role, "text": token}
+            chat.append({
+                'role': 'assistant',
+                'content': current_assistant_trace
+            })
+            if len(current_tool_call.strip()) == 0:
+                break
+
+            try:
+                tool, tool_args = parse_pythonic_toolcall(current_tool_call)
+            except Exception as e:
+                tool, tool_args = "?", {}
+                tool_result = f"could not parse tool call: {e}"
             else:
-                role = "assistant" if not in_reasoning else "assistant-trace"
-                yield {"type": "token", "role": role, "text": token}
-        chat.append({
-            'role': 'assistant',
-            'content': current_assistant_trace
-        })
-        if len(current_tool_call.strip()) == 0:
-            break
+                if tool not in functions:
+                    tool_result = f'unknown tool: {tool}'
+                else:
+                    tool_result = await functions[tool](**tool_args)
+            chat.append({
+                'role': 'tool',
+                'content': tool_result
+            })
 
-        tool, tool_args = parse_pythonic_toolcall(current_tool_call)
-        if tool not in functions:
-            tool_result = f'unknown tool: {tool}'
-        else:
-            tool_result = await functions[tool](**tool_args)
-        chat.append({
-            'role': 'tool',
-            'content': tool_result
-        })
+            yield {"type": "toolcall", "tool": tool, "args": tool_args,
+                   "result": tool_result}
 
-        yield {"type": "toolcall", "tool": tool, "args": tool_args,
-               "result": tool_result}
-
-    yield {"type": "done", "chars": 0}
+        yield {"type": "done", "chars": 0}
+    except Exception as e:
+        yield {"type": "error", "error": str(e)}

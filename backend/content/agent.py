@@ -1,7 +1,7 @@
 import ast
 import json
 
-from backend.data import store
+from backend.data import projects, store
 
 # list_sources, list_sources_tags
 # search_sources_by_title, search_sources_by_tags
@@ -49,13 +49,19 @@ async def _get_source_content(pid: str, source_id: str):
         if not source_id.startswith("src_"):
             error_msg += " Wrong source ID format: it should start with 'src_'."
         return error_msg
-    content = await document_text(source) if source else ""
+    if not await projects.has_source(pid, source_id):
+        return f"Source {source_id} is not in this project."
+    content = await document_text(source)
     if content == "":
         return "Source has no content."
     return content[:15000]
 
 async def _get_source_tags(pid: str, source_id: str):
     source = await store.get_source(source_id)
+    if source is None:
+        return "Source not found."
+    if not await projects.has_source(pid, source_id):
+        return f"Source {source_id} is not in this project."
     return json.dumps(source["tags"])
 
 
