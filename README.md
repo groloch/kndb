@@ -11,6 +11,7 @@ scientific papers, websites and blog posts, links markdown notes to each source,
 - **Spaced repetition** — to help remembering the essential in sources.
 - **Built-in summarization** — summarize any source and have the result appended directly to the source's notes.
 - **Projects** — organize sources into named projects with other people.
+- **Kanban board** — each project has a work board: columns with WIP limits, cards with labels, assignees and due dates, drag & drop, archiving, on its own tab.
 - **Search** — filter sources by title substring, tag (`@tag`), or project (`/project`).
 - **Bring your own LLM** — works with any OpenAI-compatible server (vLLM, llama.cpp, Ollama, OpenAI, etc.). No model runs inside KNDB.
 
@@ -49,7 +50,7 @@ Everything but the source documents lives in one **SQLite database** (`data/kndb
 
 ```
 data/
-  kndb.db              # sources, projects, notes, anchors, quizzes — SQLite
+  kndb.db              # sources, projects, notes, anchors, quizzes, boards — SQLite
   sources/<id>.<ext>   # the fetched/uploaded document (pdf / md / html)
   sources/<id>.txt     # optional clean-text rendition, used for LLM calls
 ```
