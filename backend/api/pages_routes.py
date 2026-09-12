@@ -47,3 +47,12 @@ async def project_page(request: Request, pid: str):
     if not await projects.get_project(pid):
         raise HTTPException(404, f"project {pid} not found")
     return page(request, "project.html")
+
+
+@router.get("/agent")
+async def agent_page(request: Request):
+    """The user's own workspace agent at the top level.
+    The pane is the same templates/agent.html a project's Agent tab includes;
+    the page script binds it to the caller's personal workspace
+    """
+    return page(request, "agent.html")

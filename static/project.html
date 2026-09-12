@@ -14,6 +14,7 @@
 
 {% set active_tab = "projects" %}
 {% set user_workspace = false %}
+{% set agent_title = "Project Agent" %}
 
 
 {% include "templates/kndb_header.html" %}
@@ -85,51 +86,7 @@
 
   <!-- ======================= AGENT ======================= -->
   <div id="tab-agent" class="tab-pane hidden">
-    <div class="agent-shell">
-      <section class="agent-chat" aria-label="Agent chat mockup">
-        <header class="agent-chat-head">
-          <div>
-            <h2>Project Agent</h2>
-          </div>
-        </header>
-
-        <div class="agent-thread" aria-label="Conversation">
-          <article class="agent-msg agent-msg-user">
-            <p>Example user message.</p>
-            <time>09:15</time>
-          </article>
-          <article class="agent-msg agent-msg-ai-trace collapsed">
-            <p>Example agent reasoning trace, folded to one line until it is clicked.</p>
-          </article>
-          <div class="agent-toolcall collapsed" aria-label="Tool call activity">
-            <button class="agent-toolcall-head" type="button">
-              <span class="agent-toolcall-caret">▸</span>
-              <span class="agent-toolcall-name">used search_sources_by_title</span>
-            </button>
-            <div class="agent-toolcall-body">
-              <code class="agent-toolcall-args">search_sources_by_title(title="transformer quantization")</code>
-              <pre class="agent-toolcall-result">{
-  "s-1a2b": "Transformer quantization"
-}</pre>
-            </div>
-          </div>
-          <article class="agent-msg agent-msg-ai">
-            <p>Example agent message.</p>
-            <time>09:14</time>
-          </article>
-        </div>
-
-        <footer class="agent-compose" aria-label="Message composer">
-          <label class="lbl" for="agent-draft">Message</label>
-          <div class="agent-compose-row">
-            <input id="agent-draft" class="input" type="text" placeholder="Type a message...">
-            <button id="btn-send-message" class="btn primary" type="button" disabled>Send</button>
-          </div>
-        </footer>
-      </section>
-
-      <section class="agent-blank" aria-label="Reserved pane"></section>
-    </div>
+    {% include "templates/agent.html" %}
   </div>
 
   <!-- ======================= SETTINGS ======================= -->
@@ -237,7 +194,7 @@
   </div>
 </div>
 
-<!-- Import a note page from another project -->
+
 <div class="modal hidden" id="modal-import-notes">
   <div class="modal-box">
     <div class="modal-head"><h3>Import a note page</h3><button class="x" data-close="modal-import-notes">×</button></div>
