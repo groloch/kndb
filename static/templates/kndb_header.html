@@ -1,10 +1,31 @@
 <header class="topbar">
-  <div class="brand">KNDB</div>
+  <a class="brand" href="/">
+    <svg class="brand-mark" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+      <rect width="20" height="20" rx="5.5"></rect>
+      <path d="M7.2 5.4v9.2M12.6 5.4 7.5 10l5.1 4.8" fill="none" stroke="#fff"
+            stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+    <span>KNDB</span>
+  </a>
   <nav class="top-nav">
     <a href="/" class="tab {% if active_tab == 'sources' %}active{% endif %}">Library</a>
     <a href="/projects" class="tab {% if active_tab == 'projects' %}active{% endif %}">Projects</a>
   </nav>
   <div class="top-actions">
+    <button id="btn-theme" class="icon-btn theme-btn" type="button"
+            title="Toggle dark mode" aria-label="Toggle dark mode">
+      <svg class="ico-moon" viewBox="0 0 24 24" width="15" height="15" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+      </svg>
+      <svg class="ico-sun" viewBox="0 0 24 24" width="15" height="15" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+           stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+      </svg>
+    </button>
     <span id="user-switch" class="user-switch"></span>
   </div>
 </header>

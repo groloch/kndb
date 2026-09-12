@@ -126,11 +126,15 @@ function makeTextSurface(cfg) {
     */
     const d = doc();
     if (d === document || d.getElementById("kndb-anchor-style")) return;
+    // The frame has its own document, so it inherits no CSS variables: the
+    // accent is read off the app's root at injection time.
+    const accent = getComputedStyle(document.documentElement)
+      .getPropertyValue("--accent").trim() || "#4f46e5";
     const el = d.createElement("style");
     el.id = "kndb-anchor-style";
     el.textContent = ".anchor-overlay{position:absolute;top:0;left:0;width:100%;"
       + "height:0;pointer-events:none;z-index:2147483000}"
-      + ".anchor-hl{position:absolute;background:#4a6cf7;opacity:.2;"
+      + ".anchor-hl{position:absolute;background:" + accent + ";opacity:.2;"
       + "border-radius:2px;transition:opacity .12s}"
       + ".anchor-hl.hover{opacity:.42}"
       // !important because the source's own stylesheet is not ours to predict

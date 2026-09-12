@@ -21,6 +21,24 @@ const KNDB = (window.KNDB = {
 
 KNDB.may = (role, action) => (KNDB.grants[action] || []).includes(role);
 
+(function initTheme() {
+  /* Dark mode: one toggle in the header, the choice remembered, the OS
+  * preference as the default. Each page's <head> sets data-theme before the
+  * first paint; this only adds the fallback and the flip.
+  */
+  const THEME_KEY = "kndb.theme";
+  const root = document.documentElement;
+  if (!root.dataset.theme) {
+    root.dataset.theme = localStorage.getItem(THEME_KEY)
+      || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  }
+  const btn = document.getElementById("btn-theme");
+  if (btn) btn.addEventListener("click", () => {
+    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+    localStorage.setItem(THEME_KEY, root.dataset.theme);
+  });
+})();
+
 (function patchFetch() {
   /* Stamps the acting user on every /api/ request
   */

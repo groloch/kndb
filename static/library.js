@@ -516,7 +516,7 @@ function makeLibrary(cfg) {
     /* Drag-to-resize one pane, its width remembered under storageKey
     */
     const saved = parseFloat(localStorage.getItem(storageKey));
-    if (saved) panel.style.flex = `0 0 ${(saved * 100).toFixed(2)}%`;
+    if (saved && !NARROW.matches) panel.style.flex = `0 0 ${(saved * 100).toFixed(2)}%`;
     handle.addEventListener("mousedown", e => {
       e.preventDefault();
       document.body.classList.add("resizing");
@@ -537,6 +537,26 @@ function makeLibrary(cfg) {
       window.addEventListener("mouseup", onUp);
     });
   }
+
+  const NARROW = window.matchMedia("(max-width: 900px)");
+
+  function applyPaneMode() {
+    /* Narrow screens stack the panes: the remembered row widths are dropped,
+    * and reapplied when there is room for a row layout again
+    */
+    const dir = $("#panel-dir"), res = $("#panel-res");
+    if (NARROW.matches) {
+      dir.style.flex = "";
+      res.style.flex = "";
+      return;
+    }
+    const wd = parseFloat(localStorage.getItem(key("w.dir")));
+    const wr = parseFloat(localStorage.getItem(key("w.res")));
+    if (wd) dir.style.flex = `0 0 ${(wd * 100).toFixed(2)}%`;
+    if (wr) res.style.flex = `0 0 ${(wr * 100).toFixed(2)}%`;
+  }
+  if (NARROW.addEventListener) NARROW.addEventListener("change", applyPaneMode);
+  else if (NARROW.addListener) NARROW.addListener(applyPaneMode);
 
   function setDirFolded(folded) {
     /* Folds or unfolds the tree pane, and remembers which
@@ -559,6 +579,7 @@ function makeLibrary(cfg) {
     TREE.setProject(pid());
     setupSplitter($('.splitter[data-split="dir"]'), $("#panel-dir"), key("w.dir"), 0.14, 0.72);
     setupSplitter($('.splitter[data-split="res"]'), $("#panel-res"), key("w.res"), 0.2, 0.8);
+    applyPaneMode();
     setDirFolded(localStorage.getItem(key("fold.dir")) === "1");
     return refreshTree();
   }

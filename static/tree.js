@@ -19,7 +19,19 @@
  * }
  */
 
-const TREE_ICON = { source: "📄", note: "📝", readme: "📖" };
+function _svg(inner) {
+  return '<svg viewBox="0 0 24 24" width="14" height="14" fill="none"'
+    + ' stroke="currentColor" stroke-width="1.8" stroke-linecap="round"'
+    + ' stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+}
+
+const TREE_ICON = {
+  source: _svg('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>'
+    + '<path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/>'),
+  note: _svg('<path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11l5-5V5a2 2 0 0 0-2-2Z"/>'
+    + '<path d="M15 21v-4a2 2 0 0 1 2-2h4"/>'),
+  readme: _svg('<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>'),
+};
 
 function makeTree(cfg) {
   const T = {
