@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:,">
+<title>Learning — KNDB</title>
+<link rel="stylesheet" href="/static/style.css">
+<script>document.documentElement.dataset.theme=localStorage.getItem("kndb.theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");</script>
+</head>
+<body>
+
+{% set active_tab = "learning" %}
+{% include "templates/kndb_header.html" %}
+
+<main id="main" class="main learning">
+
+  <!-- The builder: pick a selection, see what it holds, start a session.
+       learning.js fills the tag chips, the source rows and the aggregates. -->
+  <section class="learning-builder" id="learning-builder">
+    <h1 class="learning-title">Learning</h1>
+    <p class="learning-sub">Replay the quizzes of your library over a
+      selection — by tag for now. Sessions run full page; every answer is
+      stored per source, so a wrong one comes up for review sooner.</p>
+    <div class="learning-cols">
+      <div class="learning-panel">
+        <h2>Selection</h2>
+        <p class="muted learning-sub">Pick a strategy, then the tags you want
+          to review. No tag selected means your whole library.</p>
+        <div class="seg" id="lb-strategy">
+          <label><input type="radio" name="lb-strategy" value="tag" checked><span>By tag</span></label>
+        </div>
+        <div class="lb-tags" id="lb-tags"></div>
+        <p class="lb-aggregate" id="lb-aggregate"></p>
+      </div>
+      <div class="learning-panel">
+        <h2>Sources</h2>
+        <div class="lb-sources-list" id="lb-sources-list"></div>
+        <div class="lb-foot">
+          <label class="lb-dueonly" title="Only questions whose next review is due now">
+            <input type="checkbox" id="lb-due-only">
+            <span>Only due questions</span>
+          </label>
+          <span class="lb-caughtup" id="lb-caughtup"></span>
+          <button class="btn primary lb-start" id="lb-start" disabled>Start session</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- The player: one full-page session over the selection's queue.
+       All the in-session markup lives in the #lp-body host. -->
+  <section class="learning-player hidden" id="learning-player">
+    <div class="learning-player-inner">
+      <header class="learning-head">
+        <span class="lp-source-chip"><span class="chip">learning</span><b id="lp-source-title"></b></span>
+        <span class="lp-meta" id="lp-progress"></span>
+        <span class="lp-meta" id="lp-score"></span>
+        <button id="lp-abort" class="btn small" type="button" title="Stop and go back to the selection">Abort</button>
+      </header>
+      <div class="learning-body" id="lp-body"></div>
+    </div>
+  </section>
+
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/static/common.js"></script>
+<script src="/static/learning.js"></script>
+</body>
+</html>

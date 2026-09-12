@@ -56,3 +56,13 @@ async def agent_page(request: Request):
     the page script binds it to the caller's personal workspace
     """
     return page(request, "agent.html")
+
+
+@router.get("/learning")
+async def learning_page(request: Request):
+    """The Learning tab at the top level: replay quizzes over a selection of
+    the caller's workspace sources, full page.
+    The shell only — everything it shows comes from the API, scoped to the
+    caller's personal workspace by the quiz routes themselves
+    """
+    return page(request, "learning.html")

@@ -220,9 +220,10 @@ async function deleteNotePage(nid) {
   }
 }
 
-/* One dialog for everything a source's quiz is: how it is going, and the three
- * things you can do about it. The generator, the player and the question
- * manager are opened from here rather than from the top bar.
+/* One dialog for everything a source's quiz is: how it is going, and the two
+ * things you can do about it. Generation and question management are opened
+ * from here; playing moved to the Learning tab (/learning), which replays a
+ * selection of sources full page instead of one quiz in a dialog
  */
 
 const BOXES = [
@@ -243,7 +244,6 @@ async function openQuizHub() {
   $("#quiz-hub-source").textContent = LIB.source.title;
   $("#quiz-hub-stats").innerHTML = "";
   $("#quiz-hub-progress").innerHTML = '<p class="muted">Loading…</p>';
-  $("#btn-quiz-play").disabled = true;
   try {
     const [quiz, stats] = await Promise.all([
       api(`/api/quiz/${LIB.source.id}`),
@@ -311,9 +311,8 @@ function renderQuizHub() {
       + `<p class="muted qh-when">${last ? "Last answered " + fmtDate(last)
                                          : "Never played yet"}</p>`;
   }
-  $("#btn-quiz-play").disabled = !total;
   $("#quiz-hub-hint").textContent = total
-    ? "Due questions come first; a wrong answer sends one back to the start."
+    ? "Review this source with others on the Learning tab — sessions play from a whole selection, not one quiz."
     : "A quiz is built from your notes, the document, or both.";
 }
 
@@ -359,121 +358,6 @@ $("#quiz-gen-submit").addEventListener("click", async () => {
     setBusy(btn, false, "Generate");
   }
 });
-
-$("#btn-quiz-play").addEventListener("click", async () => {
-  if (!LIB.source || !S.quiz || !S.quiz.questions.length) return;
-  try {
-    const order = await api(`/api/quiz/${LIB.source.id}/order`);
-    closeModal("#modal-quiz");
-    startQuizSession(S.quiz, order.questions);
-  } catch (e) {
-    toast("Could not start quiz: " + e.message, "err");
-  }
-});
-
-function startQuizSession(quiz, questions) {
-  /* Runs one play-through, in the order the server gave.
-  * A missed question comes back once, at the end of the queue
-  */
-  const body = $("#quiz-body");
-  const queue = [...questions];
-  const sid = LIB.source.id;
-  let total = 0, correct = 0;
-  const attempted = new Set();
-  const requeued = new Set();
-
-  openModal("#modal-quiz-play");
-  renderIntro();
-
-  function renderIntro() {
-    body.innerHTML = `
-      <div class="quiz-summary">
-        <p><strong>${questions.length}</strong> questions · due-for-review first · wrong answers come back once</p>
-        <button class="btn primary" id="qz-start">Start session</button>
-      </div>`;
-    $("#qz-start").addEventListener("click", next);
-  }
-
-  function next() {
-    if (!queue.length) return renderSummary();
-    const q = queue.shift();
-    renderQuestion(q);
-  }
-
-  function renderQuestion(q) {
-    /* One question, its answers shuffled so the right one moves about
-    */
-    const opts = q.answers.map((text, idx) => ({ text, idx }));
-    for (let i = opts.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [opts[i], opts[j]] = [opts[j], opts[i]];
-    }
-    body.innerHTML = `
-      <div class="quiz-toolbar"><span>${total + 1}/${questions.length}</span>
-        <span class="quiz-progress">success so far: ${correct}</span></div>
-      <h3 class="quiz-question">${escapeHtml(q.question)}</h3>
-      <div class="quiz-answers"></div>
-      <div class="quiz-footer">
-        <span class="quiz-feedback"></span>
-        <button class="btn hidden" id="qz-next">Next</button>
-      </div>`;
-    const answersEl = $(".quiz-answers", body);
-    for (const o of opts) {
-      const b = document.createElement("button");
-      b.className = "btn ans";
-      b.dataset.idx = o.idx;
-      b.textContent = o.text;
-      b.addEventListener("click", () => answer(q, o, b));
-      answersEl.appendChild(b);
-    }
-    $("#quiz-body").scrollTop = 0;
-  }
-
-  function answer(q, chosen, btn) {
-    /* Marks the answer, requeues a missed question, and reports the result to
-    * the server
-    */
-    const ok = chosen.idx === q.answer_index;
-    attempted.add(q.id);
-    total++;
-    if (ok) correct++;
-    else if (!requeued.has(q.id)) { requeued.add(q.id); queue.push(q); }
-    $$(".ans", body).forEach(b => { b.disabled = true; });
-    $$(".ans", body).forEach(b => {
-      if (+b.dataset.idx === q.answer_index) b.classList.add("correct");
-      else if (b === btn) b.classList.add("wrong");
-    });
-    const fb = $(".quiz-feedback", body);
-    fb.textContent = ok
-      ? "✓ Correct"
-      : `✗ Incorrect — correct answer: ${q.answers[q.answer_index]}`;
-    fb.className = "quiz-feedback " + (ok ? "ok" : "no");
-    const nxt = $("#qz-next");
-    nxt.classList.remove("hidden");
-    nxt.addEventListener("click", next);
-    api(`/api/quiz/${sid}/answer`, {
-      method: "POST",
-      body: { question_id: q.id, success: ok },
-    }).catch(() => {});
-  }
-
-  function renderSummary() {
-    /* Final score, and the tree picks up the new stats
-    */
-    const pct = Math.round(100 * correct / Math.max(total, 1));
-    body.innerHTML = `
-      <div class="quiz-summary">
-        <h3>Session finished</h3>
-        <p class="big">${correct} / ${total} correct (${pct}%)</p>
-        <p class="muted">Results are stored in the source stats — questions you missed
-          are scheduled for review sooner.</p>
-        <button class="btn primary" id="qz-restart">Play again</button>
-        <button class="btn" data-close="modal-quiz-play">Close</button>
-      </div>`;
-    $("#qz-restart").addEventListener("click", () => startQuizSession(quiz, questions));
-    refreshTree();
-  }
-}
 
 document.addEventListener("keydown", e => {
   if (e.key === "Escape") hideCtx();
