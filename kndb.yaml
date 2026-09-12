@@ -14,7 +14,7 @@
 server:
   host: 127.0.0.1
   port: 5000
-  debug: false            # enables uvicorn auto-reload
+  debug: true            # enables uvicorn auto-reload
 
 data:
   dir: data               # relative to the project root, or an absolute path
@@ -22,9 +22,24 @@ data:
 llm:
   base_url: http://127.0.0.1:1234/v1   # OpenAI-compatible server
   api_key: ""                          # leave empty for local servers
-  model: liquid/lfm2.5-1.2b            # model name sent in requests
+  model: lfm2.5-1.2b-thinking            # model name sent in requests
+  # model: liquid/lfm2.5-1.2b
+
+  # base_url: http://192.168.1.12:1234/v1
+  # api_key: ""
+  # model: liquid/lfm2-24b-a2b
 
   retries: 3                           # transient-error retries (429/5xx/connection)
+
+  tool_mode: auto                       # agent tool calls: auto | native | text
+  # Open/close marker pairs that wrap a reasoning block when the provider
+  # leaves it inline in the content stream, tried in order. lfm2.5 thinking
+  # models write a leading " thinking" ... " response" block (sometimes
+  # truncated); "text" models often use <thinking> ... </thinking>.
+  thinking_markers:
+    - ["<thinking>", "</thinking>"]
+    - [" thinking", " response"]
+    - ["<think>", "response"]   # truncated opener
 
 permissions:
   default_user: me        # who an unidentified request acts as, until real auth lands

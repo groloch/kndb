@@ -160,30 +160,43 @@ _get_source_tags_tool = {
 }
 
 
-def prepare_tools(pid: str):
-    tool_list = [
-        _list_sources_tool,
-        _list_sources_tags_tool,
-        _search_sources_by_title_tool,
-        _search_sources_by_tags_tool,
-        _get_source_content_tool,
-        _get_source_tags_tool
-    ]
+_TOOLS = (
+    _list_sources_tool,
+    _list_sources_tags_tool,
+    _search_sources_by_title_tool,
+    _search_sources_by_tags_tool,
+    _get_source_content_tool,
+    _get_source_tags_tool,
+)
+
+
+def tool_dicts() -> list:
+    """The six tool schemas as JSON-Schema-ish dicts, in prompt order.
+    The single source of truth: prepare_tools renders these, so a tool cannot
+    exist in the prompt without a function to run it, or be described
+    otherwise
+    """
+    return [t["tool_dict"] for t in _TOOLS]
+
+
+def prepare_tools(pid: str, native: bool = False):
+    """(tools, functions) for one agent run.
+    native=True → tools is the schema list sent to the server in the request
+    (it knows how to format the call); native=False → the same schemas as the
+    JSON text the prompt shows the model, which writes pythonic calls back.
+    functions maps each tool name to its pid-bound async call in both cases
+    """
 
     def wrap_fn(fn):
         async def wrapped_fn(*args, **kwargs):
             return await fn(pid, *args, **kwargs)
         return wrapped_fn
 
-    tools = json.dumps([
-        tool["tool_dict"]
-        for tool in tool_list
-    ])
-    functions = {
-        tool["tool_dict"]["name"]: wrap_fn(tool["function"])
-        for tool in tool_list
-    }
-    return tools, functions
+    tools = tool_dicts()
+    functions = {t["tool_dict"]["name"]: wrap_fn(t["function"]) for t in _TOOLS}
+    if native:
+        tools = [{"type": "function", "function": t} for t in tools]
+    return (tools if native else json.dumps(tools)), functions
 
 def parse_json_toolcall(tool_call: str):
     tool_call = json.loads(tool_call)
@@ -201,3 +214,27 @@ def parse_pythonic_toolcall(tool_call: str):
     for keyword in tool_call.body.keywords:
         fn_args[keyword.arg] = ast.literal_eval(keyword.value)
     return fn_name, fn_args
+
+def normalize_native_toolcall(call: dict) -> tuple:
+    """(name, args, call_id) out of a server-side tool_calls record.
+    arguments arrives as an unparsed JSON string; it is read tolerantly, so a
+    server that truncates or mangles it still moves the loop along instead of
+    killing the run
+    """
+    from backend.integrations.llm import extract_json
+
+    fn = call.get("function") or {}
+    name = fn.get("name") or ""
+    args_raw = fn.get("arguments") or ""
+    args = {}
+    if isinstance(args_raw, str) and args_raw.strip():
+        try:
+            args = json.loads(args_raw)
+        except (json.JSONDecodeError, TypeError):
+            try:
+                args = extract_json(args_raw)
+            except ValueError:
+                args = {}
+    if not isinstance(args, dict):
+        args = {}
+    return name, args, call.get("id") or ""

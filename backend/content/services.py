@@ -5,7 +5,9 @@ writes the result back through the quiz and note stores
 """
 
 import asyncio
+import json
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -13,7 +15,8 @@ from ..data import notes as note_store
 from ..data import quiz as quiz_store
 from ..data import store, projects
 from ..integrations import llm
-from ..content.agent import prepare_tools, parse_json_toolcall, parse_pythonic_toolcall
+from ..content.agent import (prepare_tools, parse_pythonic_toolcall,
+                             normalize_native_toolcall)
 
 
 _INTERVALS = [0, 1, 2, 4, 7, 15, 30, 60]
@@ -422,25 +425,138 @@ async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
     except Exception as e:
         yield {"type": "error", "error": str(e)}
 
+_SENTINEL_RE = re.compile(r"<\|tool_call_start\|>(.*?)<\|tool_call_end\|>", re.S)
+
+
+async def _run_tool(functions: dict, name: str, args: dict) -> str:
+    """The tool's answer, or a refusal string the model can act on — a call
+    that names no known tool or crashes is material, not the end of the run
+    """
+    if name not in functions:
+        return f"unknown tool: {name}"
+    try:
+        return await functions[name](**args)
+    except Exception as e:  # noqa: BLE001
+        return f"tool {name} failed: {e}"
+
+
+async def _text_turn(chat: list, functions: dict) -> tuple:
+    """One agent turn under the text-sentinel contract: the server parses no
+    tool calls, the model writes them pythonically between the sentinels, and
+    the reasoning ` thinking`/`<thinking>` block rides inline in the answer.
+    Returns (events, assistant_msg, tool_msgs) — what to stream, what to
+    append to the conversation, and one tool message per call made
+    """
+    raw_parts = []
+    async for part in llm.stream_agent_chat(chat):
+        text = part.get("text") or ""
+        raw_parts.append(text)
+    raw = "".join(raw_parts)
+
+    events = []
+    trace, answer = llm.split_thinking(_SENTINEL_RE.sub("", raw))
+    if trace:
+        events.append({"type": "token", "role": "assistant-trace", "text": trace})
+    if answer:
+        events.append({"type": "token", "role": "assistant", "text": answer})
+
+    tool_msgs = []
+    for call_str in _SENTINEL_RE.findall(raw):
+        try:
+            name, args = parse_pythonic_toolcall(call_str)
+        except Exception as e:  # noqa: BLE001
+            result = f"could not parse tool call: {e}"
+            events.append({"type": "toolcall", "tool": "?", "args": {},
+                           "result": result})
+        else:
+            result = await _run_tool(functions, name, args)
+            events.append({"type": "toolcall", "tool": name, "args": args,
+                           "result": result})
+        tool_msgs.append({"role": "tool", "content": result})
+    return events, {"role": "assistant", "content": raw}, tool_msgs
+
+
+async def _native_turn(chat: list, tools: list, functions: dict) -> tuple:
+    """One agent turn over the server's native tool-call contract: the tools
+    array goes in the request, tool_calls come back structurally, and the
+    reasoning arrives in reasoning_content or as a ` thinking` block inline
+    in the content. Returns like _text_turn
+    """
+    events = []
+    raw_parts = []
+    reasoning = []
+    calls = []
+    splitter = llm.ThinkingSplitter()
+    async for part in llm.stream_agent_chat(chat, tools=tools):
+        kind = part["type"]
+        if kind == "reasoning":
+            reasoning.append(part["text"])
+            events.append({"type": "token", "role": "assistant-trace",
+                           "text": part["text"]})
+        elif kind == "content":
+            raw_parts.append(part["text"])
+            for role, text in splitter.feed(part["text"]):
+                events.append({"type": "token", "role": (
+                    "assistant" if role == "answer" else "assistant-trace"),
+                    "text": text})
+        else:
+            calls = part.get("tool_calls") or []
+
+    content = "".join(raw_parts)
+    assistant = {"role": "assistant", "content": content}
+    if reasoning:
+        assistant["reasoning_content"] = "".join(reasoning)
+
+    tool_msgs = []
+    if calls:
+        assistant["tool_calls"] = [
+            {"id": c.get("id", ""), "type": "function", "function": {
+                "name": (c.get("function") or {}).get("name", ""),
+                "arguments": (c.get("function") or {}).get("arguments", "")}}
+            for c in calls
+        ]
+    for call in calls:
+        name, args, call_id = normalize_native_toolcall(call)
+        result = await _run_tool(functions, name, args)
+        tool_msgs.append({"role": "tool", "content": result,
+                          "tool_call_id": call_id})
+        events.append({"type": "toolcall", "tool": name, "args": args,
+                       "result": result})
+    return events, assistant, tool_msgs
+
+
 async def stream_agent(pid: str, message: str):
     """One agent run over a project, streamed as SSE events.
     Ends on a "done" event, or a single "error" one like the other streams —
-    nothing raises out of the router. A tool call that fails to parse or names
-    no known tool comes back as a toolcall carrying the refusal, so the loop
-    can answer from it instead of dying
+    nothing raises out of the router. Tool calls travel natively (the server
+    gets the tools array) when it supports them, pythonically between
+    sentinels when it does not; a call that fails to parse or names no known
+    tool comes back as a toolcall carrying the refusal, so the loop answers
+    from it instead of dying
     """
     try:
         project = await projects.get_project(pid)
         if project is None:
             raise ValueError("project not found")
 
-        tools, functions = prepare_tools(pid)
+        mode = await llm.resolve_tool_mode()
+        tools, functions = prepare_tools(pid, native=(mode == "native"))
 
         system = llm.load_prompt(
             "project_agent",
             project_name=project['name'],
             project_description=project['description'],
-            tools=tools,
+            tools=json.dumps(tools) if isinstance(tools, (list, tuple)) else tools,
+            tool_style=(
+                "You may call the tools below by emitting tool calls — the "
+                "server formats them for you, so never write a call's syntax "
+                "into your answer. Do not describe a call you are making; "
+                "just make it."
+                if mode == "native"
+                else "You should use pythonic-style toolcalls, not json or any "
+                     "other format. For example a `fn` tool taking 2 arguments "
+                     "should be called as: `fn(arg1=value1, arg2=value2)`"
+            ),
         )
 
         yield {"type": "token", "role": "user", "text": message}
@@ -450,58 +566,17 @@ async def stream_agent(pid: str, message: str):
             {'role': 'user', 'content': message}
         ]
         while True:
-            in_reasoning = False
-            in_tool = False
-            current_tool_call = ''
-            current_assistant_trace = ''
-
-            async for token in llm.stream_chat(
-                chat, temperature=0.8
-            ):
-                current_assistant_trace += token
-                if token == '<thinking>':
-                    in_reasoning = True
-                    continue
-                elif token == '</thinking>':
-                    in_reasoning = False
-                    continue
-
-                if token == '<|tool_call_start|>':
-                    in_tool = True
-                    continue
-                elif token == '<|tool_call_end|>':
-                    in_tool = False
-                    continue
-
-                if in_tool:
-                    current_tool_call += token
-                else:
-                    role = "assistant" if not in_reasoning else "assistant-trace"
-                    yield {"type": "token", "role": role, "text": token}
-            chat.append({
-                'role': 'assistant',
-                'content': current_assistant_trace
-            })
-            if len(current_tool_call.strip()) == 0:
-                break
-
-            try:
-                tool, tool_args = parse_pythonic_toolcall(current_tool_call)
-            except Exception as e:
-                tool, tool_args = "?", {}
-                tool_result = f"could not parse tool call: {e}"
+            if mode == "native":
+                events, assistant, tool_msgs = await _native_turn(
+                    chat, tools, functions)
             else:
-                if tool not in functions:
-                    tool_result = f'unknown tool: {tool}'
-                else:
-                    tool_result = await functions[tool](**tool_args)
-            chat.append({
-                'role': 'tool',
-                'content': tool_result
-            })
-
-            yield {"type": "toolcall", "tool": tool, "args": tool_args,
-                   "result": tool_result}
+                events, assistant, tool_msgs = await _text_turn(chat, functions)
+            chat.append(assistant)
+            for ev in events:
+                yield ev
+            chat.extend(tool_msgs)
+            if not tool_msgs:
+                break
 
         yield {"type": "done", "chars": 0}
     except Exception as e:

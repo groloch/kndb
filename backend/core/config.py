@@ -26,6 +26,19 @@ _DEFAULTS: dict = {
         "api_key": "",
         "model": "LFM2.5-1.2B-Instruct",
         "retries": 3,
+        # How the agent's tool calls are carried: "auto" probes the server once,
+        # "native" always sends the tools array, "text" (pythonic
+        # calls written into the answer) never does.
+        "tool_mode": "auto",
+        # Open/close pairs that wrap a reasoning block when the provider leaves it
+        # inline in the content stream, tried in order. The lfm2.5 thinking models
+        # write a leading " thinking" ... " response" block, occasionally truncated;
+        # "text" models often use <thinking> ... </thinking>.
+        "thinking_markers": [
+            ["<thinking>", "</thinking>"],
+            [" thinking", " response"],
+            ["<think>", "response"],
+        ],
     },
     "permissions": {
         "default_user": "me",
@@ -180,6 +193,19 @@ LLM_BASE_URL = str(_CONFIG["llm"]["base_url"]).rstrip("/")
 LLM_API_KEY = str(_CONFIG["llm"]["api_key"])
 LLM_MODEL = str(_CONFIG["llm"]["model"])
 LLM_RETRIES = _num("llm.retries")
+
+LLM_TOOL_MODE = str(_CONFIG["llm"]["tool_mode"])
+if LLM_TOOL_MODE not in ("auto", "native", "text"):
+    _fail(f"llm.tool_mode must be one of auto, native, text, "
+          f"got {LLM_TOOL_MODE!r}")
+_markers = _CONFIG["llm"]["thinking_markers"]
+if (not isinstance(_markers, list)
+        or not all(isinstance(p, (list, tuple)) and len(p) == 2
+                   and isinstance(p[0], str) and p[0]
+                   and isinstance(p[1], str) and p[1]
+                   for p in _markers)):
+    _fail("llm.thinking_markers must be a list of [open, close] string pairs")
+LLM_THINKING_MARKERS = [(str(p[0]), str(p[1])) for p in _markers]
 
 DEFAULT_USER = str(_CONFIG["permissions"]["default_user"]).strip() or "me"
 ROLES = _strs("permissions.roles", _CONFIG["permissions"]["roles"])
