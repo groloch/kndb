@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 
 from ..core import db
 from ..core.db import Source
-from . import projects
+from . import board, projects
 
 
 DATA_DIR = db.DATA_DIR
@@ -193,6 +193,7 @@ async def delete_source(sid: str) -> None:
             await s.delete(src)
             await s.commit()
     await projects.remove_source_everywhere(sid)  # drop project links
+    await board.sweep_source(None, sid)  # cards pointing at it are severed
     if not row:
         return
     for path in (row["source_path"], text_sidecar(row["source_path"])):

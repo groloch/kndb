@@ -31,6 +31,7 @@
   <nav class="sub-tabs">
     <button class="subtab active" data-tab="overview">Overview</button>
     <button class="subtab" data-tab="library">Library</button>
+    <button class="subtab" data-tab="board">Board</button>
     <button class="subtab" data-tab="agent">Agent</button>
     <button class="subtab" data-tab="settings">Settings</button>
   </nav>
@@ -82,6 +83,23 @@
     <div class="splitter" data-split="res"></div>
 
     {% include "templates/notes_editor.html" %}
+  </div>
+
+  <!-- ======================= BOARD ======================= -->
+  <div id="tab-board" class="tab-pane hidden">
+    <div class="board-wrap">
+      <div class="board-toolbar">
+        <input id="board-search" class="input" type="search"
+               placeholder="Search cards…" spellcheck="false">
+        <label class="board-toggle" title="Only cards assigned to you">
+          <input type="checkbox" id="board-mine"> Mine</label>
+        <label class="board-toggle" title="Show archived cards">
+          <input type="checkbox" id="board-arch"> Archived</label>
+        <button id="btn-add-column" class="btn small">+ Column</button>
+      </div>
+      <div id="board" class="board"></div>
+      <div id="board-archived" class="board-archived"></div>
+    </div>
   </div>
 
   <!-- ======================= AGENT ======================= -->
@@ -194,7 +212,37 @@
   </div>
 </div>
 
+<!-- The card editor (board.js drives it) -->
+<div class="modal hidden" id="modal-card">
+  <div class="modal-box">
+    <div class="modal-head"><h3 id="card-modal-title">Card</h3><button class="x" data-close="modal-card">×</button></div>
+    <div class="modal-body">
+      <label class="lbl">Title</label>
+      <input id="card-title" class="input" type="text" spellcheck="false">
+      <label class="lbl">Description — markdown</label>
+      <textarea id="card-desc" class="input" rows="4" spellcheck="false"></textarea>
+      <div class="row3">
+        <div><label class="lbl">Due date</label><input id="card-due" class="input" type="date"></div>
+        <div><label class="lbl">Source</label><select id="card-source" class="input"></select></div>
+      </div>
+      <label class="lbl">Labels</label>
+      <div class="tags-list" id="card-labels"></div>
+      <div class="tag-add"><input id="card-label-input" class="input" placeholder="new label…" spellcheck="false">
+        <button id="btn-card-label" class="btn primary" type="button">+ Add</button></div>
+      <label class="lbl">Assignees</label>
+      <div id="card-assignees" class="check-list"></div>
+      <div class="modal-actions">
+        <button id="btn-card-arch" class="btn small hidden">Archive</button>
+        <button id="btn-card-delete" class="btn small danger hidden">Delete permanently</button>
+        <span class="hint"></span>
+        <button class="btn" data-close="modal-card">Cancel</button>
+        <button id="card-save" class="btn primary">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
 
+<!-- Import a note page from another project -->
 <div class="modal hidden" id="modal-import-notes">
   <div class="modal-box">
     <div class="modal-head"><h3>Import a note page</h3><button class="x" data-close="modal-import-notes">×</button></div>
@@ -226,6 +274,7 @@
 <script src="/static/tree.js"></script>
 <script src="/static/library.js"></script>
 <script src="/static/agent.js"></script>
+<script src="/static/board.js"></script>
 <script src="/static/project.js"></script>
 </body>
 </html>

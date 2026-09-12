@@ -30,10 +30,11 @@ function switchTab(tab) {
   * The blame gutter can only be measured while its tab is visible
   */
   $$(".subtab").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
-  ["overview", "library", "agent", "settings"].forEach(t => {
+  ["overview", "library", "board", "agent", "settings"].forEach(t => {
     $("#tab-" + t).classList.toggle("hidden", t !== tab);
   });
   if (tab === "library") scheduleGutter();
+  if (tab === "board") BOARD.open();
 }
 
 $$(".subtab").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
@@ -149,6 +150,16 @@ const LIB = makeLibrary({
 
 const AGENT = makeAgent({
   projectId: () => PID
+});
+
+const BOARD = makeBoard({
+  projectId: () => PID,
+  readOnly: () => S.readOnly,
+  members: () => S.project.members || [],
+  sources: () => S.rows,
+  // The card pill opens the source in the Library tab, which is the one
+  // selection funnel the pages share.
+  onOpenSource: sid => { switchTab("library"); LIB.selectSource(sid); },
 });
 
 async function loadProject() {

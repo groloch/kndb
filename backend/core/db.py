@@ -195,6 +195,52 @@ class SourceQuiz(Base):
     stats: Mapped[str] = mapped_column(Text, default="")  # JSON
 
 
+class BoardColumn(Base):
+    """One column of a project's kanban board.
+    Its cards hang off it, and deleting it takes them: a column without cards
+    is a workflow concept, not a folder"""
+
+    __tablename__ = "board_columns"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)  # col_<hex>
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    wip_limit: Mapped[int] = mapped_column(Integer, default=0)  # 0 = no limit
+    color: Mapped[str] = mapped_column(String(20), default="")  # optional accent
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+class BoardCard(Base):
+    """One card of a kanban column.
+    ``project_id`` is denormalized so a project sweep is one delete, and
+    ``labels``/``assignees`` are comma-separated strings, the ``sources.tags``
+    convention. ``source_id`` optionally points at a source of the same
+    project; cards never own text lines, so there is no blame"""
+
+    __tablename__ = "board_cards"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)  # crd_<hex>
+    project_id: Mapped[str] = mapped_column(String(40), index=True)
+    column_id: Mapped[str] = mapped_column(String(40), index=True)
+    title: Mapped[str] = mapped_column(String(300), default="")
+    description: Mapped[str] = mapped_column(Text, default="")  # markdown
+    labels: Mapped[str] = mapped_column(String(500), default="")
+    assignees: Mapped[str] = mapped_column(String(500), default="")
+    due_date: Mapped[str] = mapped_column(String(40), default="")  # YYYY-MM-DD
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_id: Mapped[str] = mapped_column(String(40), default="")
+    created_by: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    updated_at: Mapped[str] = mapped_column(String(40), default="")
+
+
+Index("ix_board_column_project", BoardColumn.project_id)
+Index("ix_board_card_column", BoardCard.column_id)
+Index("ix_board_card_project", BoardCard.project_id)
+
+
 _engine = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 

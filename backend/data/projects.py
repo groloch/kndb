@@ -11,8 +11,8 @@ import time
 from sqlalchemy import delete, func, select
 
 from ..core import config, db
-from ..core.db import (Project, ProjectFolder, ProjectMember, ProjectSource,
-                       SourceQuiz)
+from ..core.db import (BoardCard, BoardColumn, Project, ProjectFolder,
+                       ProjectMember, ProjectSource, SourceQuiz)
 
 
 # All of these are knobs in kndb.yaml; re-exported here because this module is
@@ -225,6 +225,8 @@ async def delete_project(pid: str) -> None:
         await s.execute(delete(ProjectSource).where(ProjectSource.project_id == pid))
         await s.execute(delete(ProjectFolder).where(ProjectFolder.project_id == pid))
         await s.execute(delete(SourceQuiz).where(SourceQuiz.project_id == pid))
+        await s.execute(delete(BoardColumn).where(BoardColumn.project_id == pid))
+        await s.execute(delete(BoardCard).where(BoardCard.project_id == pid))
         await s.commit()
     from . import notes  # local import: notes.py depends on this module
     await notes.delete_for_project(pid)
@@ -303,6 +305,8 @@ async def remove_member(pid: str, name: str) -> bool:
                 raise ValueError(f"cannot remove the last {OWNER_ROLE} of a project")
         await s.delete(m)
         await s.commit()
+    from . import board
+    await board.sweep_member(pid, name)
     return True
 
 async def set_member_role(pid: str, name: str, role: str) -> bool:
@@ -370,9 +374,10 @@ async def remove_source(pid: str, source_id: str) -> bool:
         await s.execute(delete(SourceQuiz).where(SourceQuiz.project_id == pid,
                                                  SourceQuiz.source_id == source_id))
         await s.commit()
-    from . import anchors, notes
+    from . import anchors, board, notes
     await notes.delete_for_source(pid, source_id)
     await anchors.delete_for_project_source(pid, source_id)
+    await board.sweep_source(pid, source_id)
     return True
 
 async def remove_source_everywhere(source_id: str) -> None:
