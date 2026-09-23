@@ -1,5 +1,8 @@
-{# The agent pane: one stateless, read-only agent run over a single project
+{# The agent pane: one read-only agent over a single project
    (services.stream_agent), streamed as SSE and drawn by agent.js.
+   The conversation persists per (project, user) for the server process's
+   lifetime (content.sessions): a reloaded page redraws it from the session
+   replay, and "New conversation" resets it.
    Shared by a project's Agent tab and the top-level workspace agent page —
    the host wraps it in its own .tab-pane and, before including, sets
    agent_title (Jinja) and optionally agent_subtitle #}
@@ -10,6 +13,8 @@
         <h2>{{ agent_title | default("Agent") }}</h2>
         {% if agent_subtitle %}<p>{{ agent_subtitle }}</p>{% endif %}
       </div>
+      <button id="btn-agent-new" class="btn small" type="button"
+              title="Forget this conversation — the agent starts fresh">New conversation</button>
     </header>
 
     <div class="agent-thread" aria-label="Conversation"></div>

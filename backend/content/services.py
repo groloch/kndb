@@ -15,6 +15,7 @@ from ..data import notes as note_store
 from ..data import quiz as quiz_store
 from ..data import store, projects
 from ..integrations import llm
+from ..content import sessions
 from ..content.agent import (prepare_tools, parse_pythonic_toolcall,
                              normalize_native_toolcall)
 
@@ -425,7 +426,10 @@ async def stream_summarize(pid: str, sid: str, note_id: str, author: str,
     except Exception as e:
         yield {"type": "error", "error": str(e)}
 
-_SENTINEL_RE = re.compile(r"<\|tool_call_start\|>(.*?)<\|tool_call_end\|>", re.S)
+_SENTINEL_OPEN = "<|tool_call_start|>"
+_SENTINEL_CLOSE = "<|tool_call_end|>"
+_SENTINEL_RE = re.compile(
+    re.escape(_SENTINEL_OPEN) + r"(.*?)" + re.escape(_SENTINEL_CLOSE), re.S)
 
 
 async def _run_tool(functions: dict, name: str, args: dict) -> str:
@@ -440,49 +444,60 @@ async def _run_tool(functions: dict, name: str, args: dict) -> str:
         return f"tool {name} failed: {e}"
 
 
-async def _text_turn(chat: list, functions: dict) -> tuple:
+def _emit(role: str, text: str) -> tuple:
+    """A token event, as the loop streams it out
+    """
+    return ("event", {"type": "token",
+                      "role": "assistant" if role == "answer" else "assistant-trace",
+                      "text": text})
+
+
+async def _text_turn(chat: list, functions: dict):
     """One agent turn under the text-sentinel contract: the server parses no
     tool calls, the model writes them pythonically between the sentinels, and
     the reasoning ` thinking`/`<thinking>` block rides inline in the answer.
-    Returns (events, assistant_msg, tool_msgs) — what to stream, what to
-    append to the conversation, and one tool message per call made
+    Yields ("event", ev) as the tokens land — a sentinel-aware splitter
+    swallows the calls live, so only trace and answer ever stream — then one
+    ("turn", assistant, tool_msgs) record: what to append to the conversation
+    and one tool message per call made. The calls themselves run and stream
+    once the turn closes, their spans fully in hand
     """
+    splitter = llm.ThinkingSplitter(drops=[(_SENTINEL_OPEN, _SENTINEL_CLOSE)])
     raw_parts = []
     async for part in llm.stream_agent_chat(chat):
         text = part.get("text") or ""
+        if not text:
+            continue
         raw_parts.append(text)
+        for role, piece in splitter.feed(text):
+            yield _emit(role, piece)
+    for role, piece in splitter.spill():
+        yield _emit(role, piece)
+
     raw = "".join(raw_parts)
-
-    events = []
-    trace, answer = llm.split_thinking(_SENTINEL_RE.sub("", raw))
-    if trace:
-        events.append({"type": "token", "role": "assistant-trace", "text": trace})
-    if answer:
-        events.append({"type": "token", "role": "assistant", "text": answer})
-
     tool_msgs = []
     for call_str in _SENTINEL_RE.findall(raw):
         try:
             name, args = parse_pythonic_toolcall(call_str)
         except Exception as e:  # noqa: BLE001
             result = f"could not parse tool call: {e}"
-            events.append({"type": "toolcall", "tool": "?", "args": {},
-                           "result": result})
+            yield ("event", {"type": "toolcall", "tool": "?", "args": {},
+                             "result": result})
         else:
             result = await _run_tool(functions, name, args)
-            events.append({"type": "toolcall", "tool": name, "args": args,
-                           "result": result})
+            yield ("event", {"type": "toolcall", "tool": name, "args": args,
+                             "result": result})
         tool_msgs.append({"role": "tool", "content": result})
-    return events, {"role": "assistant", "content": raw}, tool_msgs
+    yield ("turn", {"role": "assistant", "content": raw}, tool_msgs)
 
 
-async def _native_turn(chat: list, tools: list, functions: dict) -> tuple:
+async def _native_turn(chat: list, tools: list, functions: dict):
     """One agent turn over the server's native tool-call contract: the tools
     array goes in the request, tool_calls come back structurally, and the
     reasoning arrives in reasoning_content or as a ` thinking` block inline
-    in the content. Returns like _text_turn
+    in the content. Tokens and tool results stream as they land, yielding
+    like _text_turn
     """
-    events = []
     raw_parts = []
     reasoning = []
     calls = []
@@ -491,23 +506,23 @@ async def _native_turn(chat: list, tools: list, functions: dict) -> tuple:
         kind = part["type"]
         if kind == "reasoning":
             reasoning.append(part["text"])
-            events.append({"type": "token", "role": "assistant-trace",
-                           "text": part["text"]})
+            yield ("event", {"type": "token", "role": "assistant-trace",
+                             "text": part["text"]})
         elif kind == "content":
-            raw_parts.append(part["text"])
-            for role, text in splitter.feed(part["text"]):
-                events.append({"type": "token", "role": (
-                    "assistant" if role == "answer" else "assistant-trace"),
-                    "text": text})
+            text = part["text"]
+            raw_parts.append(text)
+            for role, piece in splitter.feed(text):
+                yield _emit(role, piece)
         else:
             calls = part.get("tool_calls") or []
+    for role, piece in splitter.spill():
+        yield _emit(role, piece)
 
     content = "".join(raw_parts)
     assistant = {"role": "assistant", "content": content}
     if reasoning:
         assistant["reasoning_content"] = "".join(reasoning)
 
-    tool_msgs = []
     if calls:
         assistant["tool_calls"] = [
             {"id": c.get("id", ""), "type": "function", "function": {
@@ -515,25 +530,37 @@ async def _native_turn(chat: list, tools: list, functions: dict) -> tuple:
                 "arguments": (c.get("function") or {}).get("arguments", "")}}
             for c in calls
         ]
+    tool_msgs = []
     for call in calls:
         name, args, call_id = normalize_native_toolcall(call)
         result = await _run_tool(functions, name, args)
         tool_msgs.append({"role": "tool", "content": result,
                           "tool_call_id": call_id})
-        events.append({"type": "toolcall", "tool": name, "args": args,
-                       "result": result})
-    return events, assistant, tool_msgs
+        yield ("event", {"type": "toolcall", "tool": name, "args": args,
+                         "result": result})
+    yield ("turn", assistant, tool_msgs)
 
 
-async def stream_agent(pid: str, message: str):
+async def stream_agent(pid: str, message: str, user: str):
     """One agent run over a project, streamed as SSE events.
     Ends on a "done" event, or a single "error" one like the other streams —
     nothing raises out of the router. Tool calls travel natively (the server
     gets the tools array) when it supports them, pythonically between
     sentinels when it does not; a call that fails to parse or names no known
     tool comes back as a toolcall carrying the refusal, so the loop answers
-    from it instead of dying
+    from it instead of dying.
+
+    The run continues the caller's per-session conversation
+    (content.sessions): it starts from the history the caller's earlier runs
+    left, and on success folds its own exchange back in. A failed run writes
+    nothing, and a second run while one is streaming is refused
     """
+    sess = sessions.get(pid, user)
+    if sess.lock.locked():
+        yield {"type": "error",
+               "error": "The agent is already answering — wait for it to finish."}
+        return
+    await sess.lock.acquire()
     try:
         project = await projects.get_project(pid)
         if project is None:
@@ -560,24 +587,38 @@ async def stream_agent(pid: str, message: str):
         )
 
         yield {"type": "token", "role": "user", "text": message}
+        streamed = [{"type": "token", "role": "user", "text": message}]
 
+        # the run continues the session's history: the system prompt is
+        # rebuilt fresh, everything after it picks up where the last run
+        # stopped
         chat = [
             {'role': 'system', 'content': system},
+            *sess.chat,
             {'role': 'user', 'content': message}
         ]
         while True:
-            if mode == "native":
-                events, assistant, tool_msgs = await _native_turn(
-                    chat, tools, functions)
-            else:
-                events, assistant, tool_msgs = await _text_turn(chat, functions)
+            turn = (_native_turn(chat, tools, functions) if mode == "native"
+                    else _text_turn(chat, functions))
+            assistant, tool_msgs = None, []
+            async for item in turn:
+                if item[0] == "turn":
+                    _, assistant, tool_msgs = item
+                else:
+                    ev = item[1]
+                    yield ev
+                    if ev["type"] in ("token", "toolcall"):
+                        streamed.append(ev)
             chat.append(assistant)
-            for ev in events:
-                yield ev
             chat.extend(tool_msgs)
             if not tool_msgs:
                 break
 
+        # a finished run only: its messages carry on, its events redraw the
+        # thread after a reload
+        sessions.remember(sess, chat[1:], streamed)
         yield {"type": "done", "chars": 0}
     except Exception as e:
         yield {"type": "error", "error": str(e)}
+    finally:
+        sess.lock.release()

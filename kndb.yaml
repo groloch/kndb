@@ -22,7 +22,7 @@ data:
 llm:
   base_url: http://127.0.0.1:1234/v1   # OpenAI-compatible server
   api_key: ""                          # leave empty for local servers
-  model: lfm2.5-1.2b-thinking            # model name sent in requests
+  model: openai/gpt-oss-20b            # model name sent in requests
   # model: liquid/lfm2.5-1.2b
 
   # base_url: http://192.168.1.12:1234/v1

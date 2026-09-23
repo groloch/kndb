@@ -10,3 +10,7 @@ static/vendor/
 
 .DS_Store
 Thumbs.db
+
+# runtime artifacts
+.kndb_venv/
+data/

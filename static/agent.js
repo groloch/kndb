@@ -328,6 +328,54 @@ function makeAgent(cfg){
         }
     }
 
+    async function newConversation() {
+        /* Forgets the conversation server-side and empties the thread —
+         * the next message starts a fresh context
+         */
+        if (A.streaming) return;
+        try {
+            await fetch(`/api/agent/session/${pid()}`, { method: "DELETE" });
+        } catch (_) {
+            return;
+        }
+        const thread = $(".agent-thread");
+        if (thread) thread.innerHTML = "";
+        A.clearedSeed = true;
+        A.lastRole = null;
+        A.lastMsgEl = null;
+        A.lastTextEl = null;
+        A.lastRaw = "";
+    }
+
+    async function replaySession() {
+        /* Redraws the thread from the session's display log — what earlier
+         * runs in this (project, user) session streamed. The page comes up
+         * with the conversation intact instead of blank
+         */
+        const thread = $(".agent-thread");
+        if (!thread) return;
+        let events = [];
+        try {
+            const r = await fetch(`/api/agent/session/${pid()}`);
+            if (r.ok) events = await r.json();
+        } catch (_) {
+            return;  // no session or server down — an empty thread is fine
+        }
+        events = (events && events.events) || [];
+        if (!events.length) return;
+
+        A.clearedSeed = true;
+        for (const ev of events) {
+            if (ev.type === "token") {
+                if (ev.role === "user") addUserMessage(ev.text || "");
+                else updateSession(ev);
+            } else if (ev.type === "toolcall") {
+                addToolCall(ev);
+            }
+        }
+        thread.scrollTop = thread.scrollHeight;
+    }
+
     if ($("#agent-draft")) {
         const entry = $("#agent-draft");
         entry.addEventListener("input", () => {
@@ -347,6 +395,10 @@ function makeAgent(cfg){
     if ($(".agent-thread")) {
         $(".agent-thread").addEventListener("click", onThreadClick);
     }
+    if ($("#btn-agent-new")) {
+        $("#btn-agent-new").addEventListener("click", newConversation);
+    }
 
     updateSendBtn();
+    replaySession();
 }

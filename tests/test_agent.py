@@ -7,8 +7,9 @@ pythonically between sentinel tokens, is run and fed back as a ``tool``
 message instead of ever being shown as text; the reasoning is split into the
 ``assistant-trace`` role whether the server ships it as reasoning_content or
 inline between markers; and a tool cannot reach outside the project it was
-called for. The agent is stateless — every run starts from the project's data
-alone.
+called for. The agent remembers per (project, user) session: a run continues
+the caller's previous exchange, other users and cleared sessions do not, and
+a failed run writes nothing (content.sessions).
 """
 
 import asyncio
@@ -319,6 +320,53 @@ def test_the_loop_stops_when_a_reply_carries_no_call(client, replies):
     assert not toolcalls(events)
 
 
+def test_a_text_reply_streams_token_by_token(client, replies):
+    """The turn streams as it lands: one token event per chunk, not one block
+    once the turn is over
+    """
+    h = mkuser(client, "ag_stream")
+    p = mkproject(client, h, "Stream")
+    replies.append(tokens("alpha ", "beta ", "gamma."))
+    events = run_agent(client, h, p["id"], "go")
+    pieces = [e["text"] for e in events
+              if e["type"] == "token" and e["role"] == "assistant"]
+    assert pieces == ["alpha ", "beta ", "gamma."]
+    assert events[-1]["type"] == "done"
+
+
+def test_a_native_reply_streams_token_by_token(client, replies):
+    h = mkuser(client, "ag_nstream")
+    p = mkproject(client, h, "NStream")
+    replies.mode = "native"
+    replies.append(tokens("one ", "two"))
+    events = run_agent(client, h, p["id"], "go")
+    pieces = [e["text"] for e in events
+              if e["type"] == "token" and e["role"] == "assistant"]
+    assert pieces == ["one ", "two"]
+    assert events[-1]["type"] == "done"
+
+
+def test_a_sentinel_mid_answer_never_reaches_the_stream(client, replies):
+    """A pythonic call riding between prose is swallowed live: the words
+    before it stream as they land, the sentinel never shows as text, and the
+    call still runs and streams its result
+    """
+    h = mkuser(client, "ag_noleak")
+    p = mkproject(client, h, "NoLeak")
+    sid = import_md(client, h, "Paper", "the body of the paper", p["id"])
+    replies.append(tokens("Let me look. ",
+                          text_call("get_source_content", source_id=sid)))
+    replies.append(tokens("Here it is."))
+    events = run_agent(client, h, p["id"], "read the paper")
+
+    for e in events:
+        if e["type"] == "token":
+            assert "<|" not in e["text"]
+    assert texts(events, "assistant") == "Let me look. Here it is."
+    (tc,) = toolcalls(events)
+    assert "the body of the paper" in tc["result"]
+
+
 # --- the loop, native transport (server tool_calls) ------------------------
 
 def test_native_tool_call_transport(client, replies):
@@ -481,6 +529,41 @@ def test_thought_splitter_streams_a_plain_answer_through(client):
     assert out == [("answer", "The "), ("answer", "answer "), ("answer", "is 4.")]
 
 
+def test_thought_splitter_swallows_dropped_spans(client):
+    """Dropped spans — the tool-call sentinels of text mode — never reach
+    trace or answer, even split across tokens; text around them streams
+    through as it lands
+    """
+    from backend.integrations import llm
+
+    s = llm.ThinkingSplitter(drops=[("<|c|>", "<|/c|>")])
+    out = []
+    for piece in ["a ", "<|", "c|>swallow", "ed<|/c|> b"]:
+        out += s.feed(piece)
+    out += s.spill()
+    assert out == [("answer", "a "), ("answer", " b")]
+    assert s.finish() == (None, "a  b")
+
+    # a drop that never closes is discarded at end of stream, its opening
+    # held-back prefix too
+    s = llm.ThinkingSplitter(drops=[("<|c|>", "<|/c|>")])
+    out = []
+    for piece in ["ans ", "<|c|> oops"]:
+        out += s.feed(piece)
+    assert out == [("answer", "ans ")]
+    assert s.finish() == (None, "ans ")
+
+    # text before a dropped span closes off any later trace, like in
+    # split_thinking
+    s = llm.ThinkingSplitter(drops=[("<|c|>", "<|/c|>")])
+    out = []
+    for piece in ["Sure. ", "<|c|>x<|/c|>", "<thinking>late</thinking>"]:
+        out += s.feed(piece)
+    out += s.spill()
+    assert out == [("answer", "Sure. "), ("answer", "<thinking>late</thinking>")]
+    assert s.finish() == (None, "Sure. <thinking>late</thinking>")
+
+
 # --- mode resolution ------------------------------------------------------
 
 class _Resp:
@@ -618,20 +701,152 @@ def test_only_members_may_talk_to_the_agent(client):
     assert r.status_code == 403
 
 
-# --- statelessness --------------------------------------------------------
+# --- per-session memory ---------------------------------------------------
 
-def test_each_run_starts_fresh(client, replies):
-    h = mkuser(client, "ag_fresh")
-    p = mkproject(client, h, "Fresh")
+def test_a_run_continues_the_previous_one(client, replies):
+    """The next run starts from the system prompt and the previous exchange,
+    not from the new question alone
+    """
+    h = mkuser(client, "ag_memory")
+    p = mkproject(client, h, "Memory")
     replies.append(tokens("first answer"))
     run_agent(client, h, p["id"], "first question")
     replies.append(tokens("second answer"))
     run_agent(client, h, p["id"], "second question")
 
-    # nothing of the first run survives into the second: its first call is
-    # system + the new question, nothing else
+    conv = replies.seen[-1]
+    assert [m["role"] for m in conv] == ["system", "user", "assistant", "user"]
+    assert conv[1]["content"] == "first question"
+    assert conv[2]["content"] == "first answer"
+    assert conv[3]["content"] == "second question"
+
+
+def test_tool_traffic_rides_the_history_too(client, replies):
+    """The exchange a tool call produced — assistant with its tool_calls and
+    the tool answers — is history like any other turn
+    """
+    h = mkuser(client, "ag_hist_tool")
+    p = mkproject(client, h, "HistTool")
+    import_md(client, h, "Paper", "the body", p["id"])
+
+    replies.mode = "native"
+    replies.append(native_calls(("call_1", "list_sources", {})))
+    replies.append(tokens("first answer"))
+    run_agent(client, h, p["id"], "first question")
+    replies.append(tokens("second answer"))
+    run_agent(client, h, p["id"], "second question")
+
+    conv = replies.seen[-1]
+    assert [m["role"] for m in conv] == [
+        "system", "user", "assistant", "tool", "assistant", "user"]
+    assert conv[2]["tool_calls"][0]["function"]["name"] == "list_sources"
+    assert conv[3]["tool_call_id"] == "call_1"
+    assert conv[4]["content"] == "first answer"
+    assert conv[5]["content"] == "second question"
+
+
+def test_sessions_are_per_user(client, replies):
+    """Two members of one project converse separately — neither's history
+    leaks into the other's context
+    """
+    a = mkuser(client, "ag_user_a")
+    b = mkuser(client, "ag_user_b")
+    p = mkproject(client, a, "Shared")
+    r = client.post(f"/api/projects/{p['id']}/members",
+                    json={"name": "ag_user_b", "role": "contributor"},
+                    headers=a)
+    assert r.status_code == 200, r.text
+    replies.append(tokens("answer to a"))
+    run_agent(client, a, p["id"], "question from a")
+    replies.append(tokens("answer to b"))
+    run_agent(client, b, p["id"], "question from b")
+
+    conv = replies.seen[-1]
+    assert [m["role"] for m in conv] == ["system", "user"]
+    assert conv[-1]["content"] == "question from b"
+
+
+def test_a_failed_run_writes_no_history(client, replies, monkeypatch):
+    """A run that dies mid-stream leaves the session as it was: no partial
+    answer, no half-finished tool turn becomes history
+    """
+    from backend.integrations import llm
+
+    h = mkuser(client, "ag_failed")
+    p = mkproject(client, h, "Failed")
+    replies.append(tokens("good answer"))
+    run_agent(client, h, p["id"], "good question")
+
+    async def dead(messages, tools=None, max_tokens=None, temperature=0.6):
+        raise llm.LLMError("connection refused")
+        yield  # unreachable; the yield makes this an async generator
+
+    # wrap the fixture's stub, so the failure can be switched off again
+    # without undoing the fixture's own patches
+    stub = llm.stream_agent_chat
+    failing = True
+
+    async def flaky(*a, **k):
+        if failing:
+            raise llm.LLMError("connection refused")
+            yield  # unreachable
+        async for chunk in stub(*a, **k):
+            yield chunk
+
+    monkeypatch.setattr(llm, "stream_agent_chat", flaky)
+    events = run_agent(client, h, p["id"], "doomed question")
+    assert events[-1]["type"] == "error"
+
+    failing = False
+    replies.append(tokens("recovered"))
+    run_agent(client, h, p["id"], "after the failure")
+
+    conv = replies.seen[-1]
+    assert [m["role"] for m in conv] == ["system", "user", "assistant", "user"]
+    assert conv[1]["content"] == "good question"
+    assert conv[3]["content"] == "after the failure"
+
+
+def test_the_session_replays_and_resets(client, replies):
+    """A reloaded page redraws the thread from the session's display log;
+    deleting the session forgets both the log and the history
+    """
+    h = mkuser(client, "ag_replay")
+    p = mkproject(client, h, "Replay")
+    import_md(client, h, "Paper", "the body", p["id"])
+    replies.append(tokens(text_call("list_sources")))
+    replies.append(tokens("found it"))
+    run_agent(client, h, p["id"], "list them")
+
+    r = client.get(f"/api/agent/session/{p['id']}", headers=h)
+    assert r.status_code == 200
+    events = r.json()["events"]
+    kinds = [(e["type"], e.get("role")) for e in events]
+    assert ("token", "user") in kinds
+    assert ("toolcall", None) in kinds
+    assert ("token", "assistant") in kinds
+    assert texts([e for e in events if e["type"] == "token"],
+                 "assistant") == "found it"
+    assert not [e for e in events if e["type"] in ("done", "error")]
+
+    r = client.delete(f"/api/agent/session/{p['id']}", headers=h)
+    assert r.status_code == 200
+    assert client.get(f"/api/agent/session/{p['id']}",
+                      headers=h).json()["events"] == []
+
+    replies.append(tokens("after reset"))
+    run_agent(client, h, p["id"], "hello again")
     assert [m["role"] for m in replies.seen[-1]] == ["system", "user"]
-    assert replies.seen[-1][-1]["content"] == "second question"
+
+
+def test_the_session_routes_need_membership(client):
+    owner = mkuser(client, "ag_sess_owner")
+    stranger = mkuser(client, "ag_sess_stranger")
+    p = mkproject(client, owner, "SessClosed")
+    assert client.get(f"/api/agent/session/{p['id']}",
+                      headers=stranger).status_code == 403
+    assert client.delete(f"/api/agent/session/{p['id']}",
+                         headers=stranger).status_code == 403
 
 
 def test_a_dead_llm_is_an_error_event(client, replies, monkeypatch):

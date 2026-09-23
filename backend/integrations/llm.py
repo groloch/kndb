@@ -438,19 +438,30 @@ class ThinkingSplitter:
     opens the trace, its matching close ends it — applied with a lookahead
     window, so a marker split across two tokens is still seen and a plain
     answer pops out as soon as the opening marker is ruled out. feed()
-    returns the (role, text) pairs the token made ready; finish() the whole
-    split
+    returns the (role, text) pairs the token made ready; spill() the text
+    still held when the stream ends; finish() the whole split
+
+    `drops` names marker pairs whose whole span is swallowed — never trace,
+    never answer — wherever they sit (the tool-call sentinels a text-mode
+    model writes into a live answer). A possible opening is held back until
+    the next token proves it plain text, and text around a dropped span
+    stays answer, which — like in split_thinking — closes off any later
+    trace
     """
 
-    def __init__(self, markers=None):
+    def __init__(self, markers=None, drops=None):
         self._pairs = list(markers or config.LLM_THINKING_MARKERS)
         self._opens = [p[0] for p in self._pairs]
         self._closes = [p[1] for p in self._pairs]
         self._window = max((len(c) for c in self._closes), default=0)
+        self._drop_opens = [p[0] for p in (drops or [])]
+        self._drop_closes = [p[1] for p in (drops or [])]
+        self._drop_window = max((len(o) for o in self._drop_opens), default=0)
         self._deferred = ""
         self._trace = ""
         self._answer = ""
         self._in_trace = False
+        self._in_drop = False
         self._allow_trace = True
         self._close = None
 
@@ -462,6 +473,18 @@ class ThinkingSplitter:
             self._deferred = ""
         self._allow_trace = False
         return out
+
+    def _drop_hold(self):
+        """How long a tail of the held text could still grow into a drop-open
+        marker — the part that must not be answered yet. The longest such
+        suffix is the earliest a marker could have started
+        """
+        top = min(len(self._deferred), self._drop_window - 1)
+        for n in range(top, 0, -1):
+            tail = self._deferred[-n:]
+            if any(o.startswith(tail) for o in self._drop_opens):
+                return n
+        return 0
 
     def feed(self, token: str) -> list:
         """One more content token; [(role, text), ...] with roles trace/answer
@@ -487,6 +510,17 @@ class ThinkingSplitter:
                     out.append(("trace", head))
                     continue
                 return out
+            if self._in_drop:
+                pos, needle = _find_any(self._deferred, self._drop_closes)
+                if pos != -1:
+                    self._deferred = self._deferred[pos + len(needle):]
+                    self._in_drop = False
+                    continue
+                # inside a dropped span nothing is kept, so a window that
+                # overgrows is simply cut away, not spilled to trace
+                if len(self._deferred) > 2 * self._drop_window:
+                    self._deferred = self._deferred[-2 * self._drop_window:]
+                return out
             if self._allow_trace and self._deferred:
                 for open_, close in self._pairs:
                     if self._deferred.startswith(open_):
@@ -498,21 +532,51 @@ class ThinkingSplitter:
                     continue
                 if any(o.startswith(self._deferred) for o in self._opens):
                     return out
+            if self._drop_opens and self._deferred:
+                pos, needle = _find_any(self._deferred, self._drop_opens)
+                if pos != -1:
+                    # the text before the span is answer, whatever came before
+                    head, rest = self._deferred[:pos], self._deferred[pos + len(needle):]
+                    self._in_drop = True
+                    self._deferred = head
+                    out.extend(self._flush_answer())
+                    self._deferred = rest
+                    continue
+                hold = self._drop_hold()
+                if hold == len(self._deferred) and self._deferred:
+                    return out
+                if hold:
+                    self._deferred = self._deferred[:len(self._deferred) - hold]
+                    out.extend(self._flush_answer())
+                    continue
             if not self._deferred:
                 return out
             out.extend(self._flush_answer())
             return out
 
+    def spill(self) -> list:
+        """End-of-stream flush: the text still held goes where the state says
+        — a trace tail to the trace, anything else to the answer; a dropped
+        span that never closed is discarded. [(role, text), ...], often empty
+        """
+        out = []
+        if self._deferred:
+            if self._in_drop:
+                pass
+            elif self._in_trace:
+                self._trace += self._deferred
+                out.append(("trace", self._deferred))
+            else:
+                self._answer += self._deferred
+                out.append(("answer", self._deferred))
+            self._deferred = ""
+        return out
+
     def finish(self) -> tuple:
         """(trace, answer) — pending text flushed; trace is None when the turn
         never opened one
         """
-        if self._deferred:
-            if self._in_trace:
-                self._trace += self._deferred
-            else:
-                self._answer += self._deferred
-            self._deferred = ""
+        self.spill()
         return (self._trace or None), self._answer
 
 def split_thinking(text: str, markers=None) -> tuple:
