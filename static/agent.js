@@ -20,6 +20,7 @@ function makeAgent(cfg){
         lastRole: null,
         lastMsgEl: null,
         lastTextEl: null,
+        lastRaw: "",
         clearedSeed: false
     }
 
@@ -62,6 +63,10 @@ function makeAgent(cfg){
         const text = token.text || "";
         if (!text) return;
 
+        // The user's message is drawn locally the moment it is sent; what the
+        // server echoes back is only a confirmation, never drawn
+        if (role === "user") return;
+
         const starting = A.lastRole !== role || !A.lastMsgEl || !A.lastTextEl;
         // The whitespace a model leaves around a tool call would otherwise
         // open a bubble of its own, empty but for its timestamp
@@ -70,6 +75,8 @@ function makeAgent(cfg){
         clearSeed(thread);
 
         if (starting) {
+            removePending();
+
             const msg = document.createElement("article");
             switch (role) {
                 case "user":
@@ -85,8 +92,12 @@ function makeAgent(cfg){
                     msg.className = "agent-msg";
             }
 
-            const p = document.createElement("p");
-            p.textContent = "";
+            /* The model answers in markdown, so assistant bubbles render it;
+             * user messages stay plain text
+             */
+            const p = role === "assistant"
+                ? Object.assign(document.createElement("div"), { className: "agent-md" })
+                : document.createElement("p");
             msg.appendChild(p);
 
             if (role === "user" || role === "assistant"){
@@ -104,7 +115,90 @@ function makeAgent(cfg){
             A.lastRole = role;
         }
 
-        A.lastTextEl.textContent += text;
+        A.lastRaw += text;
+        if (role === "assistant") {
+            /* Re-render the whole bubble: markdown is structural, so a token
+             * can close a fence or list opened earlier in the message
+             */
+            A.lastTextEl.innerHTML = renderMarkdown(A.lastRaw);
+        } else {
+            A.lastTextEl.textContent = A.lastRaw;
+        }
+        thread.scrollTop = thread.scrollHeight;
+    }
+
+    function addUserMessage(text) {
+        /* The user's own bubble, shown at once — before the server has even
+         * acknowledged the message
+         */
+        const thread = $(".agent-thread");
+        if (!thread) return;
+
+        clearSeed(thread);
+
+        const msg = document.createElement("article");
+        msg.className = "agent-msg agent-msg-user";
+        const p = document.createElement("p");
+        p.textContent = text;
+        msg.appendChild(p);
+
+        const time = document.createElement("time");
+        const now = new Date();
+        time.dateTime = now.toISOString();
+        time.textContent = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        msg.appendChild(time);
+
+        thread.appendChild(msg);
+
+        A.lastRole = "user";
+        A.lastMsgEl = msg;
+        A.lastTextEl = p;
+        A.lastRaw = text;
+        thread.scrollTop = thread.scrollHeight;
+    }
+
+    function showPending() {
+        /* The three moving dots on the model's side, shown while the model
+         * prefills — between the send and its first token
+         */
+        const thread = $(".agent-thread");
+        if (!thread) return;
+
+        clearSeed(thread);
+
+        const msg = document.createElement("article");
+        msg.className = "agent-msg agent-msg-ai agent-pending";
+        for (let i = 0; i < 3; i++) {
+            const dot = document.createElement("span");
+            dot.className = "agent-typing-dot";
+            msg.appendChild(dot);
+        }
+        thread.appendChild(msg);
+        thread.scrollTop = thread.scrollHeight;
+    }
+
+    function removePending() {
+        document.querySelectorAll(".agent-pending").forEach(el => el.remove());
+    }
+
+    function addErrorMessage(text) {
+        /* A failed run — server unreachable, model error — shown where the
+         * answer would have been, so the exchange still reads as one
+         */
+        const thread = $(".agent-thread");
+        if (!thread) return;
+
+        removePending();
+
+        const msg = document.createElement("article");
+        msg.className = "agent-msg agent-msg-error";
+        msg.textContent = text;
+        thread.appendChild(msg);
+
+        A.lastRole = null;
+        A.lastMsgEl = null;
+        A.lastTextEl = null;
+        A.lastRaw = "";
         thread.scrollTop = thread.scrollHeight;
     }
 
@@ -168,6 +262,7 @@ function makeAgent(cfg){
         A.lastRole = null;
         A.lastMsgEl = null;
         A.lastTextEl = null;
+        A.lastRaw = "";
         thread.scrollTop = thread.scrollHeight;
     }
 
@@ -186,12 +281,30 @@ function makeAgent(cfg){
         if (trace) trace.classList.toggle("collapsed");
     }
 
+    function autoGrow(entry) {
+        /* The draft grows with its lines, up to the CSS max-height, where the
+         * textarea's own scrollbar takes over
+         */
+        entry.style.height = "auto";
+        entry.style.height = `${entry.scrollHeight}px`;
+    }
+
+    function clearDraft(entry) {
+        entry.value = "";
+        autoGrow(entry);
+    }
+
     async function sendMessage() {
-        const message = $("#agent-draft").value.trim();
-        if (!message) return;
+        const entry = $("#agent-draft");
+        const message = entry.value.trim();
+        if (!message || busy()) return;
 
         A.streaming = true;
         updateSendBtn();
+        clearDraft(entry);
+
+        addUserMessage(message);
+        showPending();
 
         const body = {
             "message": message
@@ -206,14 +319,27 @@ function makeAgent(cfg){
                     else if (ev.type === "toolcall") addToolCall(ev);
                 }
             );
+        } catch (e) {
+            addErrorMessage("The agent could not answer: " + e.message);
         } finally {
+            removePending();
             A.streaming = false;
             updateSendBtn();
         }
     }
 
     if ($("#agent-draft")) {
-        $("#agent-draft").addEventListener("input", updateSendBtn);
+        const entry = $("#agent-draft");
+        entry.addEventListener("input", () => {
+            updateSendBtn();
+            autoGrow(entry);
+        });
+        /* Enter sends, Shift+Enter (and the other modifiers) make a newline */
+        entry.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter" || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
+            e.preventDefault();
+            if (!busy()) sendMessage();
+        });
     }
     if ($("#btn-send-message")) {
         $("#btn-send-message").addEventListener("click", sendMessage);

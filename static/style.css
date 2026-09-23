@@ -1270,6 +1270,49 @@ body.linking-note .note-editor { cursor: crosshair; }
   border-color: var(--border-strong);
 }
 
+.agent-msg-error {
+  margin-right: auto;
+  max-width: 86%;
+  background: var(--err-soft);
+  border-color: var(--err);
+  color: var(--err-text);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* The prefill indicator: three dots breathing in turn, inside an AI-shaped
+ * bubble that the first real token replaces
+ */
+.agent-pending {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 14px 13px;
+}
+
+.agent-typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: .35;
+  animation: agent-dot-breathe 1.2s ease-in-out infinite;
+}
+
+.agent-typing-dot:nth-child(2) { animation-delay: .2s; }
+.agent-typing-dot:nth-child(3) { animation-delay: .4s; }
+
+@keyframes agent-dot-breathe {
+  0%, 60%, 100% { opacity: .3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-typing-dot { animation: none; opacity: .6; }
+}
+
 .agent-toolcall {
   margin: 2px 0;
   max-width: 86%;
@@ -1348,6 +1391,42 @@ body.linking-note .note-editor { cursor: crosshair; }
   overflow: hidden;
 }
 
+/* Markdown inside an assistant bubble: the .prose scale, tightened to the
+ * bubble's 13px body — headings step up from it, code stays small
+ */
+.agent-md { min-width: 0; font-size: 13px; line-height: 1.55; }
+.agent-md > :first-child { margin-top: 0; }
+.agent-md > :last-child { margin-bottom: 0; }
+.agent-md h1, .agent-md h2, .agent-md h3,
+.agent-md h4, .agent-md h5, .agent-md h6 {
+  font-size: 13.5px;
+  margin: .8em 0 .3em;
+  line-height: 1.35;
+}
+.agent-md h1 { font-size: 14.5px; }
+.agent-md h2 { font-size: 14px; }
+.agent-md p { margin: .45em 0; }
+.agent-md ul, .agent-md ol { margin: .4em 0; padding-left: 1.4em; }
+.agent-md li { margin: .15em 0; }
+.agent-md code {
+  background: var(--hover); border-radius: 5px; padding: 1px 5px;
+  font: 12px var(--mono);
+}
+.agent-md pre {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 10px 12px; overflow-x: auto;
+}
+.agent-md pre code { background: none; padding: 0; }
+.agent-md blockquote {
+  margin: .5em 0; padding: 1px 12px; color: var(--muted);
+  border-left: 3px solid var(--border-strong);
+}
+.agent-md a { color: var(--accent-text); }
+.agent-md hr { border: 0; border-top: 1px solid var(--border); margin: .9em 0; }
+.agent-md table { border-collapse: collapse; margin: .5em 0; }
+.agent-md th, .agent-md td { border: 1px solid var(--border); padding: 4px 10px; }
+.agent-md img { max-width: 100%; border-radius: var(--r-sm); }
+
 .agent-compose {
   border-top: 1px solid var(--border);
   padding: 12px 20px 18px;
@@ -1356,11 +1435,21 @@ body.linking-note .note-editor { cursor: crosshair; }
 .agent-compose-row {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: flex-end;
 }
 
 .agent-compose-row .input {
   flex: 1;
+}
+
+/* The draft grows with its content, up to a cap; a scrollbar appears past it.
+ * Rows reset keeps the padding math exact — without it the declared height
+ * drifts a pixel or two per line
+ */
+.agent-compose-row textarea.input {
+  resize: none;
+  min-height: 37px;   /* one line: 8px padding + 21px line + 8px padding */
+  max-height: 180px;
 }
 
 .agent-blank {
