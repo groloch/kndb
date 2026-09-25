@@ -266,6 +266,98 @@ function makeAgent(cfg){
         thread.scrollTop = thread.scrollHeight;
     }
 
+    function addApproval(ev) {
+        /* One pending "may I?" card: what the agent wants to run and with
+        * which arguments, with Allow and Deny. The answer goes to the
+        * approval side channel, not the stream — the run is paused on it —
+        * and the approval_result event stamps the outcome onto the card
+        */
+        const thread = $(".agent-thread");
+        if (!thread || !ev) return;
+
+        clearSeed(thread);
+        removePending();
+
+        const box = document.createElement("div");
+        box.className = "agent-approval";
+        box.dataset.requestId = ev.request_id || "";
+
+        const head = document.createElement("div");
+        head.className = "agent-approval-head";
+        const name = document.createElement("span");
+        name.className = "agent-approval-name";
+        name.textContent = `wants to use ${ev.tool || "a tool"}`;
+        head.appendChild(name);
+
+        const args = document.createElement("code");
+        args.className = "agent-toolcall-args";
+        args.textContent = callSignature(ev);
+
+        const actions = document.createElement("div");
+        actions.className = "agent-approval-actions";
+        const allow = document.createElement("button");
+        allow.type = "button";
+        allow.className = "agent-approval-btn allow";
+        allow.textContent = "Allow";
+        const deny = document.createElement("button");
+        deny.type = "button";
+        deny.className = "agent-approval-btn deny";
+        deny.textContent = "Deny";
+        actions.append(allow, deny);
+
+        const note = document.createElement("span");
+        note.className = "agent-approval-note muted";
+
+        box.append(head, args, actions, note);
+        thread.appendChild(box);
+
+        async function answer(decision) {
+            allow.disabled = true;
+            deny.disabled = true;
+            try {
+                await api(`/api/agent/approval/${pid()}`, {
+                    method: "POST",
+                    body: { request_id: box.dataset.requestId, decision }
+                });
+            } catch (e) {
+                toast(e.message, "error");
+                allow.disabled = false;
+                deny.disabled = false;
+                return;
+            }
+            settleApproval({ request_id: box.dataset.requestId, decision: decision });
+        }
+        allow.addEventListener("click", () => answer("allow"));
+        deny.addEventListener("click", () => answer("deny"));
+
+        A.lastRole = null;
+        A.lastMsgEl = null;
+        A.lastTextEl = null;
+        A.lastRaw = "";
+        thread.scrollTop = thread.scrollHeight;
+    }
+
+    function settleApproval(ev) {
+        /* Stamps the outcome onto the matching card and freezes its buttons.
+        * The toolcall event that follows shows what ran — or the refusal the
+        * model reads, for a denied call
+        */
+        document.querySelectorAll(".agent-approval").forEach(box => {
+            if (!ev || !ev.request_id || box.dataset.requestId !== ev.request_id) return;
+            box.classList.add("answered");
+            const allow = box.querySelector(".agent-approval-btn.allow");
+            const deny = box.querySelector(".agent-approval-btn.deny");
+            if (allow) allow.disabled = true;
+            if (deny) deny.disabled = true;
+            const note = box.querySelector(".agent-approval-note");
+            if (note) {
+                note.textContent = ev.decision === "allow" ? "allowed"
+                    : ev.decision === "timeout" ? "timed out — denied"
+                    : "denied";
+            }
+        });
+    }
+
     function onThreadClick(e) {
         /* Folds and unfolds traces and tool calls. Clicks inside an unfolded
         * tool call are left alone, so its result stays selectable
@@ -317,6 +409,8 @@ function makeAgent(cfg){
                 (ev) => {
                     if (ev.type === "token") updateSession(ev);
                     else if (ev.type === "toolcall") addToolCall(ev);
+                    else if (ev.type === "approval_request") addApproval(ev);
+                    else if (ev.type === "approval_result") settleApproval(ev);
                 }
             );
         } catch (e) {

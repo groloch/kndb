@@ -1373,6 +1373,60 @@ body.linking-note .note-editor { cursor: crosshair; }
   color: var(--muted);
 }
 
+/* The tool-approval card: the agent pauses on a call the policy wants the
+ * user to answer. Stands out among the bubbles — a soft warning panel with
+ * Allow / Deny — and stamps its outcome in the note once answered
+ */
+.agent-approval {
+  margin: 6px 0;
+  max-width: 86%;
+  padding: 9px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  background: var(--warn-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.agent-approval-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--warn-text, var(--warn));
+  font-weight: 600;
+}
+
+.agent-approval .agent-toolcall-args {
+  color: var(--text);
+}
+
+.agent-approval-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-approval-btn {
+  padding: 4px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.agent-approval-btn:hover { border-color: var(--accent); color: var(--accent-text); }
+.agent-approval-btn.deny:hover { border-color: var(--err); color: var(--err-text); }
+.agent-approval-btn:disabled { opacity: .45; cursor: default; pointer-events: none; }
+
+.agent-approval-note { font-size: 12px; }
+.agent-approval-note:empty { display: none; }
+
+.agent-approval.answered { opacity: .8; }
+
 .agent-msg-ai-trace {
   margin: 2px 0;
   padding: 4px 12px;

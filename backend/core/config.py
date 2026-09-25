@@ -40,6 +40,13 @@ _DEFAULTS: dict = {
             ["<think>", "response"],
         ],
     },
+    "agent": {
+        "tool_security": {
+            "levels": {"read": "allow", "write": "prompt", "admin": "prompt"},
+            "overrides": {},
+        },
+        "approval_timeout": 300,
+    },
     "permissions": {
         "default_user": "me",
         "roles": ["owner", "maintainer", "contributor", "spectator"],
@@ -162,6 +169,32 @@ def _grant(name: str) -> tuple:
               f"permissions.roles: {', '.join(unknown)}")
     return roles
 
+def _tool_security() -> dict:
+    """The agent's tool-call guarding policy: one verdict per security level
+    and per-tool overrides, every verdict one of allow | prompt | deny.
+    A malformed word would otherwise be read as an allow, so it stops the boot
+    """
+    raw = _CONFIG["agent"]["tool_security"] or {}
+    levels_raw, overrides_raw = raw.get("levels"), raw.get("overrides")
+    if not isinstance(levels_raw, dict) or not isinstance(overrides_raw, dict):
+        _fail("agent.tool_security.levels and .overrides must be mappings")
+
+    def _policies(section: str, mapping: dict) -> dict:
+        out = {}
+        for k, v in mapping.items():
+            if not isinstance(k, str) or not isinstance(v, str) \
+                    or v not in ("allow", "prompt", "deny"):
+                _fail(f"{section}.{k!r} must be one of allow, prompt, deny, "
+                      f"got {v!r}")
+            out[k] = v
+        return out
+
+    levels = _policies("agent.tool_security.levels", levels_raw)
+    if not levels:
+        _fail("agent.tool_security.levels must name at least one level")
+    return {"levels": levels,
+            "overrides": _policies("agent.tool_security.overrides", overrides_raw)}
+
 def _caps(name: str) -> dict:
     """The switches a project of one kind is created with, every key of
     ``CAP_KEYS`` present.
@@ -238,3 +271,8 @@ WEB_MD_CHARS = _num("limits.web_markdown_chars")
 WEB_MD_MAX_TOKENS = _num("limits.web_markdown_max_tokens")
 ANCHOR_LOC_CHARS = _num("limits.anchor_locator_chars")
 ANCHOR_DOC_LOC_CHARS = _num("limits.anchor_doc_locator_chars")
+
+AGENT_TOOL_SECURITY = _tool_security()
+AGENT_APPROVAL_TIMEOUT = _num("agent.approval_timeout")
+if AGENT_APPROVAL_TIMEOUT <= 0:
+    _fail("agent.approval_timeout must be a positive number of seconds")

@@ -141,20 +141,23 @@ def test_the_tool_spec_and_the_functions_agree(client):
     """prepare_tools is the single source of truth: a tool cannot exist in the
     prompt without a function to run it, or be described otherwise
     """
+    from backend.content import tools as catalogue
     from backend.content.agent import prepare_tools
 
     tools_json, functions = prepare_tools("prj_x")
     tools = json.loads(tools_json)
     assert [t["name"] for t in tools] == [
-        "list_sources", "list_sources_tags", "search_sources_by_title",
-        "search_sources_by_tags", "get_source_content", "get_source_tags",
-    ]
+        t["tool_dict"]["name"] for t in catalogue.TOOLS]
     assert set(functions) == {t["name"] for t in tools}
     assert all(t["description"] and t["parameters"] for t in tools)
     # native mode hands back the same schemas wrapped for the tools array
     tools_list, functions = prepare_tools("prj_x", native=True)
     assert [t["function"] for t in tools_list] == tools
     assert all(t["type"] == "function" for t in tools_list)
+    # the first six are the library reads the agent started with
+    assert [t["name"] for t in tools[:6]] == [
+        "list_sources", "list_sources_tags", "search_sources_by_title",
+        "search_sources_by_tags", "get_source_content", "get_source_tags"]
 
 
 def test_parse_pythonic_toolcall():
@@ -384,11 +387,14 @@ def test_native_tool_call_transport(client, replies):
     assert "Paper" in tc["result"]
     assert texts(events, "assistant") == "Got it."
 
-    # the tools array went over the wire, the assistant turn came back with
-    # its tool_calls echoed, and each result rode its own call id
-    assert [t["function"]["name"] for t in replies.tools_seen[0]] == [
-        "list_sources", "list_sources_tags", "search_sources_by_title",
-        "search_sources_by_tags", "get_source_content", "get_source_tags"]
+    # the tools array went over the wire (the catalogue as the run's project
+    # makes it available, in catalogue order — module gates may drop tools),
+    # the assistant turn came back with its tool_calls echoed, and each
+    # result rode its own call id
+    from backend.content.tools import TOOLS as _CATALOGUE
+    wire = [t["function"]["name"] for t in replies.tools_seen[0]]
+    catalogue = [t["tool_dict"]["name"] for t in _CATALOGUE]
+    assert wire == [n for n in catalogue if n in set(wire)]
     fed = replies.seen[1]
     assert fed[-2]["role"] == "assistant"
     assert fed[-2]["tool_calls"][0]["function"]["name"] == "list_sources"

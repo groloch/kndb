@@ -16,7 +16,9 @@ from ..data import quiz as quiz_store
 from ..data import store, projects
 from ..integrations import llm
 from ..content import sessions
-from ..content.agent import (prepare_tools, parse_pythonic_toolcall,
+from ..content import tool_guard
+from ..content import agent
+from ..content.agent import (parse_pythonic_toolcall,
                              normalize_native_toolcall)
 
 
@@ -452,7 +454,39 @@ def _emit(role: str, text: str) -> tuple:
                       "text": text})
 
 
-async def _text_turn(chat: list, functions: dict):
+async def _guarded_run(guard: tool_guard.ToolGuard, security: dict,
+                       functions: dict, name: str, args: dict):
+    """One tool call through the guard. Yields ("event", ev) for the
+    approval prompt and its answer when the tool's level asks for one, then
+    one final ("result", …) — the tool's answer or the refusal string that
+    stands in for it. A denied call (by policy or by the user) never runs;
+    the model just reads the refusal, the way it reads any other failed call.
+    The wait holds no LLM connection: calls run between the model's turns,
+    never during one
+    """
+    if name not in functions:
+        # before any guard: an unknown tool is refused on the spot, it never
+        # triggers a prompt
+        yield ("result", await _run_tool(functions, name, args))
+        return
+    outcome, payload = guard.begin(name, security.get(name, "admin"), args)
+    if outcome == "deny":
+        yield ("result", payload)
+        return
+    if outcome == "prompt":
+        yield ("event", {"type": "approval_request", "request_id": payload,
+                         "tool": name, "args": args})
+        decision = await guard.wait(payload)
+        yield ("event", {"type": "approval_result", "request_id": payload,
+                         "decision": decision})
+        if decision != "allow":
+            yield ("result", f"tool call refused: {name} was denied by the user")
+            return
+    yield ("result", await _run_tool(functions, name, args))
+
+
+async def _text_turn(chat: list, functions: dict, guard: tool_guard.ToolGuard,
+                     security: dict):
     """One agent turn under the text-sentinel contract: the server parses no
     tool calls, the model writes them pythonically between the sentinels, and
     the reasoning ` thinking`/`<thinking>` block rides inline in the answer.
@@ -484,14 +518,20 @@ async def _text_turn(chat: list, functions: dict):
             yield ("event", {"type": "toolcall", "tool": "?", "args": {},
                              "result": result})
         else:
-            result = await _run_tool(functions, name, args)
+            result = None
+            async for item in _guarded_run(guard, security, functions, name, args):
+                if item[0] == "event":
+                    yield item[1]
+                else:
+                    result = item[1]
             yield ("event", {"type": "toolcall", "tool": name, "args": args,
                              "result": result})
         tool_msgs.append({"role": "tool", "content": result})
     yield ("turn", {"role": "assistant", "content": raw}, tool_msgs)
 
 
-async def _native_turn(chat: list, tools: list, functions: dict):
+async def _native_turn(chat: list, tools: list, functions: dict,
+                       guard: tool_guard.ToolGuard, security: dict):
     """One agent turn over the server's native tool-call contract: the tools
     array goes in the request, tool_calls come back structurally, and the
     reasoning arrives in reasoning_content or as a ` thinking` block inline
@@ -533,7 +573,12 @@ async def _native_turn(chat: list, tools: list, functions: dict):
     tool_msgs = []
     for call in calls:
         name, args, call_id = normalize_native_toolcall(call)
-        result = await _run_tool(functions, name, args)
+        result = None
+        async for item in _guarded_run(guard, security, functions, name, args):
+            if item[0] == "event":
+                yield item[1]
+            else:
+                result = item[1]
         tool_msgs.append({"role": "tool", "content": result,
                           "tool_call_id": call_id})
         yield ("event", {"type": "toolcall", "tool": name, "args": args,
@@ -567,7 +612,9 @@ async def stream_agent(pid: str, message: str, user: str):
             raise ValueError("project not found")
 
         mode = await llm.resolve_tool_mode()
-        tools, functions = prepare_tools(pid, native=(mode == "native"))
+        tools, functions, security = await agent.select_tools(
+            pid, user, native=(mode == "native"))
+        guard = tool_guard.ToolGuard(pid, user)
 
         system = llm.load_prompt(
             "project_agent",
@@ -598,8 +645,9 @@ async def stream_agent(pid: str, message: str, user: str):
             {'role': 'user', 'content': message}
         ]
         while True:
-            turn = (_native_turn(chat, tools, functions) if mode == "native"
-                    else _text_turn(chat, functions))
+            turn = (_native_turn(chat, tools, functions, guard, security)
+                    if mode == "native"
+                    else _text_turn(chat, functions, guard, security))
             assistant, tool_msgs = None, []
             async for item in turn:
                 if item[0] == "turn":
