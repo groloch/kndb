@@ -3,8 +3,10 @@ Each one is static — the page fetches everything it shows from the API
 """
 
 import os
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from backend.core import config
@@ -28,25 +30,52 @@ def page(request: Request, name: str):
     )
 
 
+async def _has_session(token: str) -> bool:
+    if not token:
+        return False
+    from backend.content import auth
+
+    return await auth.resolve_session(token) is not None
+
+
+async def _protected_page(request: Request, name: str):
+    if config.AUTH_MODE == "password":
+        token = request.cookies.get(config.AUTH_COOKIE_NAME, "")
+        if not await _has_session(token):
+            next_url = quote(request.url.path + ("?" + request.url.query
+                                                 if request.url.query else ""), safe="")
+            return RedirectResponse(f"/login?next={next_url}", status_code=303)
+    return page(request, name)
+
+
+@router.get("/login")
+async def login_page(request: Request):
+    return page(request, "login.html")
+
+
 @router.get("/")
 async def index(request: Request):
+    if config.AUTH_MODE == "password":
+        token = request.cookies.get(config.AUTH_COOKIE_NAME, "")
+        if await _has_session(token):
+            return page(request, "index.html")
+        return page(request, "login.html")
     return page(request, "index.html")
 
 
 @router.get("/projects")
 async def projects_page(request: Request):
-    return page(request, "projects.html")
+    return await _protected_page(request, "projects.html")
 
 
 @router.get("/projects/{pid}")
 async def project_page(request: Request, pid: str):
     """The project shell, 404 when there is no such project.
-    Membership is not checked here: the page loads for anyone, and the API
-    calls it makes are what refuse a stranger
+    Membership is not checked here; all data APIs enforce access.
     """
     if not await projects.get_project(pid):
         raise HTTPException(404, f"project {pid} not found")
-    return page(request, "project.html")
+    return await _protected_page(request, "project.html")
 
 
 @router.get("/agent")
@@ -55,7 +84,7 @@ async def agent_page(request: Request):
     The pane is the same templates/agent.html a project's Agent tab includes;
     the page script binds it to the caller's personal workspace
     """
-    return page(request, "agent.html")
+    return await _protected_page(request, "agent.html")
 
 
 @router.get("/learning")
@@ -65,4 +94,4 @@ async def learning_page(request: Request):
     The shell only — everything it shows comes from the API, scoped to the
     caller's personal workspace by the quiz routes themselves
     """
-    return page(request, "learning.html")
+    return await _protected_page(request, "learning.html")

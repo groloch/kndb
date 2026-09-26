@@ -2,18 +2,15 @@
 
 /* Shared frontend plumbing: identity, fetch, markdown, toasts.
  *
- * Identity is dev-mode: the page states who it is acting as via a header on
- * every API call. Rather than thread that through every call site, we patch
- * fetch once here — so app.js and project.js stay unaware of it, and swapping
- * in real auth means deleting this block.
+ * Identity is either an explicit development name or a server-verified
+ * password session. API requests share CSRF and credential handling here.
  */
 
 const KNDB = (window.KNDB = {
   USER_KEY: "kndb.user",
-  // empty until /api/me answers: the server resolves an unnamed caller to
-  // permissions.default_user, so the default lives in kndb.yaml, not here
   user: localStorage.getItem("kndb.user") || "",
-  me: null,          // filled by /api/me
+  me: null,
+  authMode: "dev",
   users: [],
   roles: [],         // role vocabulary, from permissions: in kndb.yaml
   grants: {},        // action -> the roles allowed to do it
@@ -40,16 +37,22 @@ KNDB.may = (role, action) => (KNDB.grants[action] || []).includes(role);
 })();
 
 (function patchFetch() {
-  /* Stamps the acting user on every /api/ request
-  */
+  /* Dev identity and CSRF handling are centralized for API, file, and SSE calls. */
   const original = window.fetch;
   window.fetch = function (input, init) {
     const url = typeof input === "string" ? input : (input && input.url) || "";
     if (url.startsWith("/api/")) {
       init = init || {};
       const headers = new Headers(init.headers || {});
-      headers.set("X-KNDB-User", KNDB.user);
-      init = { ...init, headers };
+      if (KNDB.authMode === "dev" && !url.startsWith("/api/auth/"))
+        headers.set("X-KNDB-User", KNDB.user);
+      const method = (init.method || (input && input.method) || "GET").toUpperCase();
+      if (!/^(GET|HEAD|OPTIONS|TRACE)$/.test(method) && !headers.has("X-KNDB-CSRF")) {
+        const csrf = document.cookie.split(";").map(s => s.trim())
+          .find(s => s.startsWith("kndb_csrf="));
+        if (csrf) headers.set("X-KNDB-CSRF", decodeURIComponent(csrf.slice("kndb_csrf=".length)));
+      }
+      init = { ...init, headers, credentials: "same-origin" };
     }
     return original.call(this, input, init);
   };
@@ -158,6 +161,48 @@ function toast(msg, kind = "info", ms = 4200) {
 function modalEl(id) { return $(id.startsWith("#") ? id : `#${id}`); }
 function openModal(id) { modalEl(id).classList.remove("hidden"); }
 function closeModal(id) { modalEl(id).classList.add("hidden"); }
+
+function askSecretModal(opts = {}) {
+  return new Promise(resolve => {
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    modal.innerHTML = '<div class="modal-box narrow"><div class="modal-head"><h3></h3>'
+      + '<button class="x" type="button">×</button></div><div class="modal-body">'
+      + '<label class="lbl"></label><input class="input" type="password" autocomplete="current-password">'
+      + '<div class="modal-actions"><p class="muted hint"></p><button class="btn" data-act="cancel" type="button">Cancel</button>'
+      + '<button class="btn primary" data-act="ok" type="button"></button></div></div></div>';
+    const input = $("input", modal), ok = $('[data-act="ok"]', modal);
+    $("h3", modal).textContent = opts.title || "";
+    $(".lbl", modal).textContent = opts.label || "Password";
+    $(".hint", modal).textContent = opts.hint || "";
+    ok.textContent = opts.submit || "Continue";
+    ok.disabled = true;
+    const finish = value => { modal.remove(); resolve(value); };
+    input.addEventListener("input", () => { ok.disabled = !input.value; });
+    input.addEventListener("keydown", e => { if (e.key === "Enter" && input.value) finish(input.value); });
+    ok.addEventListener("click", () => { if (input.value) finish(input.value); });
+    modal.addEventListener("click", e => {
+      if (e.target.closest('[data-act="cancel"]') || e.target.closest(".x")) finish(null);
+    });
+    modal.addEventListener("mousedown", e => { if (e.target === modal) finish(null); });
+    document.body.appendChild(modal);
+    input.focus();
+  });
+}
+
+async function changePasswordDialog() {
+  const current = await askSecretModal({ title: "Change password", label: "Current password" });
+  if (!current) return;
+  const next = await askSecretModal({ title: "Change password", label: "New password (14+ characters)",
+    hint: "Use a long, unique passphrase.", submit: "Change password" });
+  if (!next) return;
+  try {
+    await api("/api/auth/password", { method: "POST", body: {
+      current_password: current, new_password: next,
+    }});
+    location.href = "/login";
+  } catch (e) { toast("Password change failed: " + e.message, "err"); }
+}
 
 function askModal(opts = {}) {
   /* Asks for one value, the app's own window.prompt.
@@ -604,22 +649,26 @@ function noteDeletable(page, role) {
 }
 
 async function initIdentity() {
-  /* Fills KNDB from /api/me and draws the switcher, null if the call failed.
-  * A user already stored locally wins over the one the server resolved, so
-  * the switcher's choice survives the reload it triggers
-  */
+  /* Discover auth mode before making the protected identity request. */
   let me;
   try {
+    const authInfo = await api("/api/auth/config");
+    KNDB.authMode = authInfo.mode || "dev";
     me = await api("/api/me");
   } catch (e) {
+    if (KNDB.authMode === "password" && e.status === 401 && !location.pathname.startsWith("/login")) {
+      location.href = "/login?next=" + encodeURIComponent(location.pathname + location.search);
+    }
     return null;
   }
   KNDB.me = me.user;
-  KNDB.user = KNDB.user || (me.user && me.user.name) || "";
+  KNDB.user = KNDB.authMode === "dev" ? (KNDB.user || (me.user && me.user.name) || "") : ((me.user && me.user.name) || "");
+  if (KNDB.authMode === "password") localStorage.removeItem(KNDB.USER_KEY);
   KNDB.users = me.users || [];
   KNDB.personal = me.personal_project;
   KNDB.roles = (me.permissions && me.permissions.roles) || [];
   KNDB.grants = (me.permissions && me.permissions.grants) || {};
+  if (KNDB.authMode === "password") KNDB.USER_KEY = "";
   KNDB.defaultRole = (me.permissions && me.permissions.default_role) || "";
   KNDB.ownerRole = (me.permissions && me.permissions.owner_role) || "";
   renderUserSwitcher();
@@ -633,6 +682,17 @@ function renderUserSwitcher() {
   */
   const host = $("#user-switch");
   if (!host) return;
+  if (KNDB.authMode === "password") {
+    host.innerHTML = `<span class="user-label">${escapeHtml(KNDB.me && (KNDB.me.display_name || KNDB.me.name))}</span>`
+      + '<button id="auth-password" class="btn small">Change password</button>'
+      + '<button id="auth-logout" class="btn small">Log out</button>';
+    $("#auth-password").addEventListener("click", () => changePasswordDialog());
+    $("#auth-logout").addEventListener("click", async () => {
+      try { await api("/api/auth/logout", { method: "POST" }); location.href = "/login"; }
+      catch (e) { toast("Log out failed: " + e.message, "err"); }
+    });
+    return;
+  }
   const opts = KNDB.users.map(u =>
     `<option value="${escapeHtml(u.name)}"${u.name === KNDB.user ? " selected" : ""}>`
     + escapeHtml(u.display_name || u.name) + "</option>").join("");
@@ -646,6 +706,7 @@ function renderUserSwitcher() {
     location.reload();
   });
   $("#user-new").addEventListener("click", async () => {
+    if (KNDB.me && !KNDB.me.is_active) return;
     const name = await askModal({
       title: "Add a user",
       label: "User name",

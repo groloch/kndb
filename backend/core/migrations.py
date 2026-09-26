@@ -20,6 +20,10 @@ _COLUMNS = {
         "show_blame": "BOOLEAN DEFAULT 1",
         "auto_import": "BOOLEAN DEFAULT 0",
     },
+    "users": {"password_hash": "TEXT DEFAULT ''", "is_active": "BOOLEAN DEFAULT 1"},
+    "user_sessions": {"csrf_hash": "TEXT DEFAULT ''"},
+    "login_attempts": {"failures": "INTEGER DEFAULT 0",
+                       "window_started": "TEXT DEFAULT ''"},
     "project_members": {"color": "TEXT DEFAULT ''"},
     "project_sources": {"folder": "TEXT DEFAULT ''", "added_by": "TEXT DEFAULT ''"},
 }
@@ -38,6 +42,7 @@ async def run() -> None:
     Call after ``db.init_db``, which is what creates the tables
     """
     await _add_missing_columns()
+    await _purge_expired_auth_state()
     if not await _done(_UNIFY):
         await _unify_workspace()
         await _mark(_UNIFY)
@@ -58,6 +63,22 @@ async def _add_missing_columns() -> None:
                 if name not in have:
                     await s.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
         await s.commit()
+
+async def _purge_expired_auth_state() -> None:
+    """Remove stale rate-limit buckets and expired sessions at startup."""
+    async with db.session() as s:
+        tables = {r[0] for r in (await s.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table'"))).all()}
+        if "login_attempts" in tables:
+            await s.execute(text(
+                "DELETE FROM login_attempts WHERE window_started < "
+                "datetime('now', '-1 day')"))
+        if "user_sessions" in tables:
+            await s.execute(text(
+                "DELETE FROM user_sessions WHERE expires_at < "
+                "strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')"))
+        await s.commit()
+
 
 async def _drop_legacy_columns() -> None:
     """Drops the columns the models no longer declare.

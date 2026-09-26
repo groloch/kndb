@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:,">
+<title>KNDB — Keep knowledge connected</title>
+<link rel="stylesheet" href="/static/style.css">
+<script>document.documentElement.dataset.theme=localStorage.getItem("kndb.theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");</script>
+<style>
+.auth-shell { min-height: 100vh; }
+.auth-nav { max-width: 1120px; margin: auto; padding: 24px; display: flex; justify-content: space-between; align-items: center; }
+.auth-brand { font-size: 1.2rem; font-weight: 750; letter-spacing: -.04em; }
+.auth-actions { display: flex; align-items: center; gap: 10px; }
+.auth-hero { max-width: 1120px; margin: 5vh auto 0; padding: 48px 24px 90px; display: grid; grid-template-columns: 1.15fr .85fr; gap: 64px; align-items: center; }
+.auth-copy h1 { max-width: 650px; margin: 16px 0; font-size: clamp(2.7rem, 6vw, 5rem); line-height: 1.02; letter-spacing: -.065em; }
+.auth-copy > p { max-width: 590px; color: var(--muted); font-size: 1.15rem; line-height: 1.7; }
+.auth-kicker { color: var(--accent); text-transform: uppercase; letter-spacing: .14em; font-weight: 700; font-size: .78rem; }
+.auth-points { display: grid; gap: 12px; margin-top: 32px; }
+.auth-point { display: flex; gap: 12px; align-items: flex-start; color: var(--muted); }
+.auth-point b { color: var(--text); }
+.auth-point-mark { color: var(--accent); font-weight: 800; }
+.auth-card { padding: 28px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--shadow); }
+.auth-card h2 { margin: 0 0 6px; }
+.auth-card > p { margin: 0 0 22px; color: var(--muted); }
+.auth-card .input { width: 100%; margin: 6px 0 16px; }
+.auth-card .btn { width: 100%; }
+.login-error { min-height: 1.5em; color: var(--err-text); }
+.auth-footer { max-width: 1120px; margin: auto; padding: 0 24px 28px; color: var(--muted); font-size: .85rem; }
+.auth-mode-landing #auth-card { display: none; }
+.auth-mode-landing #auth-hero { grid-template-columns: 1fr; text-align: center; }
+.auth-mode-landing .auth-copy { max-width: 800px; margin: auto; }
+.auth-mode-landing .auth-copy > p { margin-inline: auto; }
+.auth-mode-landing .auth-points { max-width: 520px; margin: 32px auto 0; text-align: left; }
+#register-panel[hidden], #login-panel[hidden] { display: none; }
+@media (max-width: 760px) { .auth-hero { grid-template-columns: 1fr; gap: 32px; margin-top: 1vh; padding-top: 30px; } .auth-copy h1 { font-size: clamp(2.5rem, 12vw, 4rem); } .auth-nav { padding: 18px; } }
+</style>
+</head>
+<body class="auth-mode-login">
+<div class="auth-shell">
+  <header class="auth-nav">
+    <a class="auth-brand" href="/" aria-label="KNDB home">KNDB</a>
+    <div class="auth-actions">
+      <button id="btn-theme" class="btn small" type="button" title="Toggle theme">◐</button>
+      <a class="btn small" id="nav-signin" href="/login">Sign in</a>
+      <a class="btn small primary" id="nav-register" href="/login?mode=register">Create account</a>
+    </div>
+  </header>
+  <main class="auth-hero" id="auth-hero">
+    <section class="auth-copy">
+      <div class="auth-kicker">Your ideas, connected</div>
+      <h1>Make room for deeper thinking.</h1>
+      <p>Bring papers, articles, notes, and questions into one calm workspace. KNDB helps you build a personal knowledge base that grows with what you learn.</p>
+      <div class="auth-points">
+        <div class="auth-point"><span class="auth-point-mark">✳</span><span><b>Keep context close.</b> Link your notes directly to the sources that inspired them.</span></div>
+        <div class="auth-point"><span class="auth-point-mark">✳</span><span><b>Learn actively.</b> Turn reading into review with quizzes and spaced repetition.</span></div>
+        <div class="auth-point"><span class="auth-point-mark">✳</span><span><b>Think together.</b> Bring a group into a shared project when you are ready.</span></div>
+      </div>
+    </section>
+    <section class="auth-card" id="auth-card">
+      <div id="login-panel">
+        <h2>Welcome back</h2>
+        <p>Sign in to continue to your workspace.</p>
+        <form id="login-form">
+          <label class="lbl" for="login-name">Username</label>
+          <input class="input" id="login-name" name="username" autocomplete="username" required>
+          <label class="lbl" for="login-password">Password</label>
+          <input class="input" id="login-password" name="password" type="password" autocomplete="current-password" required>
+          <button class="btn primary" id="login-submit" type="submit">Sign in</button>
+          <p class="login-error" id="login-error" role="alert"></p>
+        </form>
+        <p>New to KNDB? <a href="/login?mode=register">Create an account</a></p>
+      </div>
+      <div id="register-panel" hidden>
+        <h2>Create your account</h2>
+        <p>Start a private workspace for your learning.</p>
+        <form id="register-form">
+          <label class="lbl" for="register-name">Username</label>
+          <input class="input" id="register-name" name="username" autocomplete="username" minlength="1" maxlength="120" required>
+          <label class="lbl" for="register-password">Password</label>
+          <input class="input" id="register-password" name="new-password" type="password" autocomplete="new-password" minlength="14" required>
+          <label class="lbl" for="register-confirm">Confirm password</label>
+          <input class="input" id="register-confirm" name="confirm-password" type="password" autocomplete="new-password" minlength="14" required>
+          <button class="btn primary" id="register-submit" type="submit">Create account</button>
+          <p class="login-error" id="register-error" role="alert"></p>
+        </form>
+        <p>Already have an account? <a href="/login">Sign in</a></p>
+      </div>
+    </section>
+  </main>
+  <footer class="auth-footer">KNDB · A thoughtful home for what you learn.</footer>
+</div>
+<div id="toast" class="toast"></div>
+<script src="/static/common.js"></script>
+<script src="/static/login.js"></script>
+</body>
+</html>

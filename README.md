@@ -1,7 +1,8 @@
 # KNDB — Knowledge Database
 
 A self-hosted, all-in-one personal knowledge database with a web UI. It imports
-scientific papers, websites and blog posts, links markdown notes to each source, and integrates LLM-based features to help manage everything.
+scientific papers, websites and blog posts, links markdown notes to each source,
+and integrates LLM-based features to help manage everything.
 
 ## Features
 
@@ -42,7 +43,59 @@ script. It needs no Node and no packages of its own — plain Python — and it 
 the only network step: once it has run, KNDB's interface works offline.
 
 By default the app expects an OpenAI-compatible server at
-`http://127.0.0.1:8000/v1`. **All configuration lives in [kndb.yaml](kndb.yaml)** (see that file for the full option list):
+`http://127.0.0.1:8000/v1`. All configuration lives in [kndb.yaml](kndb.yaml).
+
+## Authentication and account safety
+
+The default `auth.mode: dev` exists only for local development. It permits the
+user switcher and header identity and is **not authentication**. Do not expose
+a dev-mode instance to an untrusted network.
+
+To enable password accounts:
+
+1. Install the pinned dependencies with `pip install -r requirements.txt`.
+2. Generate an independent secret pepper and keep it in a secrets manager or
+   protected service environment, never in `kndb.yaml` or source control:
+
+   ```bash
+   python -c 'import secrets; print(secrets.token_urlsafe(48))'
+   export KNDB_AUTH_PEPPER='paste-the-generated-value-here'
+   ```
+
+   Keep a secure backup of this value. If it is lost or changed, stored
+   password hashes and server-side session digests cannot be verified. Rotate
+   it only with a planned password reset/migration.
+3. Set `auth.mode: password`, `auth.cookie_secure: true`, and optionally
+   `auth.allow_registration: true` in `kndb.yaml`. Registration is disabled by
+   default; enabling it allows anyone who can reach the public landing page to
+   create an account. Turn it off again whenever open signups are not intended.
+   Serve KNDB only over HTTPS (including the browser-to-reverse-proxy
+   connection). Password mode refuses to start with insecure cookies.
+4. With registration disabled, create or provision an account interactively;
+   passwords are prompted rather than placed in shell history:
+
+   ```bash
+   python -m backend.auth_admin alice
+   ```
+
+   This command also provisions legacy name-only users without changing their
+   authored data. Use the existing username when assigning credentials to a
+   legacy identity. It may also create a new account. Project member management
+   in password mode only accepts existing accounts.
+5. Start the server. Signed-out visitors see the landing page at `/`; existing
+   accounts can sign in at `/login`, or use the create-account link when open
+   registration is enabled. Passwords must be at least 14 characters. KNDB
+   stores an Argon2id hash over a pepper-keyed password input, with a fresh
+   random salt per hash. It does not store plaintext passwords or
+   use a fast double-SHA password construction. Password mode uses opaque,
+   revocable session cookies and CSRF tokens. Failed logins are rate-limited
+   per account/client bucket; also use a rate-limiting proxy for defense in depth.
+
+Passwords are not reversible. There is no email-based password reset yet; an
+operator must use the provisioning command to reset a lost password. Password
+mode and login are not a substitute for route-level project authorization,
+secure backups, safe handling of imported HTML, or network-fetch protections.
+Review the security guidance in `_docs` before exposing a deployment.
 
 ## How it stores data
 

@@ -167,5 +167,6 @@ def test_deleting_a_source_takes_the_sidecar_with_it(client):
     with open(sidecar, "w", encoding="utf-8") as f:
         f.write("cached text")
 
-    assert client.delete("/api/source/" + sid).status_code == 200
+    assert client.delete("/api/source/" + sid,
+                         headers={"X-KNDB-User": "sidecar-owner"}).status_code == 200
     assert not os.path.exists(sidecar)

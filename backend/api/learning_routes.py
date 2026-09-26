@@ -20,9 +20,13 @@ router = APIRouter()
 
 
 async def personal_pid(user: str = Depends(current_user)) -> str:
-    """The caller's own workspace, which is where every quiz below is kept
-    """
+    """The caller's own workspace, which is where every quiz below is kept."""
     return await projects.personal_project_id(user)
+
+
+async def _ensure_personal_source(pid: str, sid: str) -> None:
+    if not await projects.has_source(pid, sid):
+        raise HTTPException(404, "source is not in your personal workspace")
 
 @router.post("/api/quiz/{sid}/generate")
 async def quiz_generate(sid: str, body: Optional[dict] = None,
@@ -33,6 +37,7 @@ async def quiz_generate(sid: str, body: Optional[dict] = None,
     failure as a final error event rather than an HTTP status
     """
     await get_source_or_404(sid)
+    await _ensure_personal_source(pid, sid)
     body = body or {}
     events = services.stream_quiz(
         pid, sid,
@@ -48,6 +53,7 @@ async def quiz_get(sid: str, pid: str = Depends(personal_pid)):
     """The caller's quiz on this source, an empty one when none was ever made
     """
     await get_source_or_404(sid)
+    await _ensure_personal_source(pid, sid)
     return await quiz_store.read_quiz(pid, sid)
 
 @router.get("/api/quiz/{sid}/order")
@@ -56,6 +62,7 @@ async def quiz_order(sid: str, pid: str = Depends(personal_pid)):
     Whatever is due comes first, and within that the worst answered
     """
     await get_source_or_404(sid)
+    await _ensure_personal_source(pid, sid)
     return {"ok": True, "questions": await services.quiz_order(pid, sid)}
 
 @router.get("/api/quiz/{sid}/stats")
@@ -64,6 +71,7 @@ async def quiz_stats(sid: str, pid: str = Depends(personal_pid)):
     question, empty when nothing was ever played
     """
     await get_source_or_404(sid)
+    await _ensure_personal_source(pid, sid)
     return {"ok": True, "stats": await quiz_store.read_stats(pid, sid)}
 
 @router.post("/api/quiz/{sid}/answer")
@@ -74,6 +82,7 @@ async def quiz_record(sid: str, body: Optional[dict] = None,
     getting it wrong drops it to the bottom box, due again straight away
     """
     await get_source_or_404(sid)
+    await _ensure_personal_source(pid, sid)
     body = body or {}
     qid = body.get("question_id")
     if not qid:
@@ -89,6 +98,7 @@ async def quiz_question_add(sid: str, body: Optional[dict] = None,
     range
     """
     await get_source_or_404(sid)
+    await _ensure_personal_source(pid, sid)
     body = body or {}
     try:
         q = await services.add_quiz_question(
@@ -108,6 +118,7 @@ async def quiz_question_update(sid: str, qid: str, body: Optional[dict] = None,
     Its record is left alone, so an edited question keeps the box it earned
     """
     await get_source_or_404(sid)
+    await _ensure_personal_source(pid, sid)
     body = body or {}
     try:
         q = await services.update_quiz_question(
@@ -128,6 +139,7 @@ async def quiz_question_delete(sid: str, qid: str,
     """Drops a question and the record it had, 404 when the quiz has no such id
     """
     await get_source_or_404(sid)
+    await _ensure_personal_source(pid, sid)
     try:
         await services.delete_quiz_question(pid, sid, qid)
     except KeyError as e:

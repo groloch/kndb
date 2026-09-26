@@ -129,13 +129,12 @@
         <div class="dblock-head">Members</div>
         <div id="prj-members" class="mini-list"></div>
         <div class="member-add">
-          <input id="member-name" class="input" placeholder="member name" spellcheck="false">
+          <input id="member-name" class="input" placeholder="existing username" spellcheck="false">
           <!-- options come from permissions: in kndb.yaml, via /api/me -->
           <select id="member-role" class="input"></select>
           <button id="btn-add-member" class="btn small">+ Add</button>
         </div>
-        <p class="muted hint">No accounts yet — members are placeholders for the future
-          collaborative system. You are the <b>owner</b> of this project.</p>
+        <p class="muted hint" id="member-hint">Add an existing KNDB account by username.</p>
       </div>
     </div>
   </div>

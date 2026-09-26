@@ -515,7 +515,8 @@ def test_quiz_is_scoped_to_the_callers_workspace(client):
     assert r.status_code == 200, r.text
 
     other = mkuser(client, "quizzer2")
-    assert client.get(f"/api/quiz/{sid}", headers=other).json()["questions"] == []
+    # A known source ID is not sufficient to read another user's personal quiz.
+    assert client.get(f"/api/quiz/{sid}", headers=other).status_code == 404
     assert len(client.get(f"/api/quiz/{sid}", headers=h).json()["questions"]) == 1
 
 

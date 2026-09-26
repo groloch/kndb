@@ -20,7 +20,7 @@ def norm(name: str) -> str:
 
 def _to_dict(u: User) -> dict:
     return {"name": u.name, "display_name": u.display_name or u.name,
-            "created_at": u.created_at or ""}
+            "created_at": u.created_at or "", "is_active": bool(u.is_active)}
 
 async def get(name: str) -> dict | None:
     """The user, None when the name is blank or unknown
@@ -57,8 +57,9 @@ async def create(name: str, display_name: str = "") -> dict:
     return await get(name)
 
 async def ensure(name: str = "") -> dict:
-    """The named user, created on the spot when missing.
-    An empty name means the dev-mode default user
-    """
+    """The named user, created on the spot when missing (dev compatibility)."""
     name = norm(name) or projects.DEFAULT_USER
-    return await get(name) or await create(name)
+    found = await get(name)
+    if found is not None:
+        return found
+    return await create(name)

@@ -44,16 +44,37 @@ Index("ix_sources_url", Source.url)  # dedup lookups by import URL
 
 
 class User(Base):
-    """An author, identified by ``name`` alone.
-    There is no credential here — authentication has not landed, and
-    ``config.DEFAULT_USER`` stands in for whoever is at the keyboard
-    """
+    """A stable account identity; credentials are optional in dev mode."""
 
     __tablename__ = "users"
 
     name: Mapped[str] = mapped_column(String(120), primary_key=True)
     display_name: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[str] = mapped_column(String(40), default="")
+    password_hash: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class LoginAttempt(Base):
+    """A failed-login counter scoped to an opaque account/client bucket."""
+
+    __tablename__ = "login_attempts"
+
+    bucket: Mapped[str] = mapped_column(String(64), primary_key=True)
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+    window_started: Mapped[str] = mapped_column(String(40), default="")
+
+
+class UserSession(Base):
+    """A revocable browser session; only the keyed token digest is persisted."""
+
+    __tablename__ = "user_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_name: Mapped[str] = mapped_column(String(120), index=True)
+    created_at: Mapped[str] = mapped_column(String(40), default="")
+    expires_at: Mapped[str] = mapped_column(String(40), index=True)
+    csrf_hash: Mapped[str] = mapped_column(String(64), default="")
 
 
 class Project(Base):

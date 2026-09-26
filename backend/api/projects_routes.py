@@ -21,15 +21,19 @@ router = APIRouter()
 
 @router.get("/api/me")
 async def whoami(user: str = Depends(current_user)):
-    """Who the caller is, who else exists, their own workspace, and the role
-    rules.
-    Everything a page needs before it can draw anything, in one call
-    """
+    """Current account, its workspace, and the project role rules."""
     from backend.data import users
 
     personal = await projects.personal_project(user)
-    return {"ok": True, "user": await users.get(user),
-            "users": await users.list_users(),
+    safe_user = await users.get(user)
+    if safe_user:
+        safe_user.pop("is_active", None)
+    dev_users = await users.list_users() if config.AUTH_MODE == "dev" else []
+    for entry in dev_users:
+        entry.pop("is_active", None)
+    return {"ok": True, "user": safe_user,
+            "users": dev_users,
+            "auth_mode": config.AUTH_MODE,
             "personal_project": personal,
             "permissions": permissions()}
 
@@ -48,10 +52,11 @@ def permissions() -> dict:
     }
 
 @router.post("/api/users")
-async def create_user(body: Optional[dict] = None):
-    """Registers a name, and the personal workspace that comes with it.
-    Open to any caller, since there are no credentials anywhere in this app
-    """
+async def create_user(body: Optional[dict] = None,
+                      user: str = Depends(current_user)):
+    """Development-only account creation for the identity switcher."""
+    if config.AUTH_MODE != "dev" or not config.DEV_USER_CREATION:
+        raise HTTPException(404, "direct user creation is disabled")
     body = body or {}
     name = (body.get("name") or "").strip()
     if not name:
@@ -139,9 +144,9 @@ async def project_members(pid: str, user: str = Depends(current_user)):
 @router.post("/api/projects/{pid}/members")
 async def add_member(pid: str, body: Optional[dict] = None,
                      user: str = Depends(current_user)):
-    """Adds somebody to the project, to a managing role.
-    A name nobody has used yet is registered on the way in, since text has to
-    belong to a user. 409 when they are already a member
+    """Adds an existing account to a project, to a managing role.
+    In dev mode an unknown placeholder is registered automatically.
+    409 when they are already a member
     """
     await get_project_or_404(pid)
     await require_role(pid, user, *MANAGE)
@@ -154,7 +159,13 @@ async def add_member(pid: str, body: Optional[dict] = None,
         raise HTTPException(400, f"invalid role; choose from {sorted(projects.ROLES)}")
     from backend.data import users
 
-    await users.ensure(name)  # a member must exist as a user to own text
+    member_user = await users.get(name)
+    if member_user is not None and not member_user.get("is_active", True):
+        raise HTTPException(409, "account is disabled")
+    if member_user is None:
+        if config.AUTH_MODE == "password":
+            raise HTTPException(404, "account not found; provision the account first")
+        await users.ensure(name)  # a member must exist as a user to own text
     try:
         m = await projects.add_member(pid, name, role)
     except ValueError as e:

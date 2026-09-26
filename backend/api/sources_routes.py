@@ -11,7 +11,8 @@ from fastapi import (APIRouter, Depends, File, Form, HTTPException, Request,
                      UploadFile)
 from fastapi.responses import FileResponse
 
-from backend.api.deps import current_user, get_source_or_404, writable_project
+from backend.api.deps import (MANAGE, current_user, get_source_or_404,
+                              require_role, writable_project)
 from backend.api.transfer_routes import mirror_to_workspace
 from backend.content import fetchers
 from backend.core import config
@@ -26,10 +27,9 @@ MAX_UPLOAD = config.UPLOAD_MAX_BYTES   # limits.upload_mb in kndb.yaml
 @router.get("/api/sources")
 async def list_sources(q: str = "", project: str = "",
                        user: str = Depends(current_user)):
-    """The sources of one project, the caller's own workspace by default.
-    q is the library search box: @tag, /project, anything else a title term
-    """
+    """The sources of one project, the caller's own workspace by default."""
     pid = project or await projects.personal_project_id(user)
+    await require_role(pid, user)
     return {"ok": True, "sources": await store.list_sources(q, pid=pid)}
 
 @router.post("/api/import")
@@ -125,11 +125,10 @@ async def _file_into(pid: str, sid: str, user: str, folder: str) -> bool:
     return added
 
 @router.get("/api/source/{sid}/content")
-async def source_content(sid: str):
-    """The stored document itself, typed from the kind it was imported as.
-    No role is asked for here: the id is the only key to a source
-    """
+async def source_content(sid: str, user: str = Depends(current_user)):
+    """The stored document, after verifying membership in a workspace holding it."""
     row = await get_source_or_404(sid)
+    await _require_source_member(sid, user)
     mime = {
         "pdf": "application/pdf",
         "md": "text/markdown",
@@ -139,12 +138,11 @@ async def source_content(sid: str):
     return FileResponse(row["source_path"], media_type=mime)
 
 @router.post("/api/source/{sid}/meta")
-async def source_meta(sid: str, body: Optional[dict] = None):
-    """Title and tags as they stand after the change.
-    Both are properties of the source itself, so the edit shows in every
-    project holding it
-    """
+async def source_meta(sid: str, body: Optional[dict] = None,
+                      user: str = Depends(current_user)):
+    """Update globally shared metadata only when authorized in every workspace."""
     row = await get_source_or_404(sid)
+    await _require_source_manager(sid, user)
     body = body or {}
     fields = {k: str(body[k] or "").strip()
               for k in ("title", "tags") if k in body}
@@ -155,15 +153,43 @@ async def source_meta(sid: str, body: Optional[dict] = None):
                                       for k in ("title", "tags")}}
 
 @router.delete("/api/source/{sid}")
-async def source_delete(sid: str):
-    """Deletes a source everywhere: the blob, its text sidecar, and its link
-    in every project that held it.
-    No role is asked for here either
-    """
+async def source_delete(sid: str, user: str = Depends(current_user)):
+    """Delete a source globally only when authorized in every workspace holding it."""
     if not await store.get_source(sid):
         raise HTTPException(404, f"source {sid} not found")
+    await _require_source_manager(sid, user)
     await store.delete_source(sid)
     return {"ok": True}
+
+async def _require_source_member(sid: str, user: str) -> None:
+    pids = await projects.projects_holding_source(sid)
+    member = False
+    for pid in pids:
+        if await projects.member_role(pid, user) is not None:
+            member = True
+            break
+    if not member:
+        raise HTTPException(403, "you are not a member of a workspace holding this source")
+
+
+async def _require_source_manager(sid: str, user: str) -> None:
+    pids = await projects.projects_holding_source(sid)
+    if not pids:
+        raise HTTPException(404, f"source {sid} is not linked to a workspace")
+    # A personal workspace owner may alter the shared source only while the
+    # source is not linked into someone else's workspace. Team links require
+    # the caller to be a manager in every affected team.
+    for pid in pids:
+        role = await projects.member_role(pid, user)
+        if role is None:
+            raise HTTPException(403, "global source change affects a workspace you cannot manage")
+        project = await projects.get_project(pid)
+        if project["kind"] == "personal":
+            if role != config.OWNER_ROLE:
+                raise HTTPException(403, "personal workspace owner role required")
+        elif role not in MANAGE:
+            raise HTTPException(403, "global source change requires a managing role")
+
 
 @router.get("/api/note/{sid}")
 async def get_note(sid: str, user: str = Depends(current_user)):
@@ -172,6 +198,8 @@ async def get_note(sid: str, user: str = Depends(current_user)):
     """
     await get_source_or_404(sid)
     pid = await projects.personal_project_id(user)
+    if not await projects.has_source(pid, sid):
+        raise HTTPException(404, "source is not in your personal workspace")
     page = await notes.ensure_single(pid, sid, author=user)
     return {"ok": True, "content": page["content"], "note_id": page["id"],
             "version": page["version"], "blame": page["blame"]}
@@ -189,6 +217,8 @@ async def put_note(sid: str, body: Optional[dict] = None,
     if content is None:
         raise HTTPException(400, "missing content")
     pid = await projects.personal_project_id(user)
+    if not await projects.has_source(pid, sid):
+        raise HTTPException(404, "source is not in your personal workspace")
     page = await notes.ensure_single(pid, sid, author=user)
     try:
         saved = await notes.save(page["id"], content, author=user,

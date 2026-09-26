@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.api import (agent_routes, anchors_routes, board_routes,
+from backend.api import (agent_routes, anchors_routes, auth_routes, board_routes,
                          learning_routes, llm_routes, notes_routes,
                          pages_routes, projects_routes, sources_routes,
                          transfer_routes)
@@ -33,7 +33,8 @@ async def lifespan(_app: FastAPI):
     store.ensure_dirs()
     await db.init_db()
     await migrations.run()
-    await users.ensure()  # the default identity always exists
+    if config.AUTH_MODE == "dev":
+        await users.ensure()  # development default identity
     yield
     await llm.aclose()
     await fetchers.aclose()
@@ -61,6 +62,7 @@ async def _unhandled_error_handler(_req, exc: Exception):
     return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
 
 
+app.include_router(auth_routes.router)
 app.include_router(llm_routes.router)
 app.include_router(sources_routes.router)
 app.include_router(learning_routes.router)

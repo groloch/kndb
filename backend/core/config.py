@@ -31,14 +31,26 @@ _DEFAULTS: dict = {
         # calls written into the answer) never does.
         "tool_mode": "auto",
         # Open/close pairs that wrap a reasoning block when the provider leaves it
-        # inline in the content stream, tried in order. The lfm2.5 thinking models
-        # write a leading " thinking" ... " response" block, occasionally truncated;
-        # "text" models often use <thinking> ... </thinking>.
+        # inline in the content stream, tried in order.
         "thinking_markers": [
             ["<thinking>", "</thinking>"],
             [" thinking", " response"],
             ["<think>", "response"],
         ],
+    },
+    "auth": {
+        # dev preserves the local identity switcher; password enables verified
+        # accounts and server-side sessions. Password mode requires a secret
+        # supplied only through KNDB_AUTH_PEPPER.
+        "mode": "dev",
+        "allow_registration": False,
+        "cookie_name": "kndb_session",
+        "cookie_secure": True,
+        "session_ttl_hours": 24,
+        "dev_identity_header": True,
+        "dev_user_creation": True,
+        "login_attempts": 10,
+        "login_window_minutes": 15,
     },
     "agent": {
         "tool_security": {
@@ -90,7 +102,7 @@ CAP_KEYS = ("allow_quiz", "multi_notes", "show_blame", "auto_import")
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """``override`` laid over ``base``, recursing into the nested mappings.
+    """``override`` laid over ``base``, recursing into nested mappings.
     A list replaces rather than extends, so naming ``permissions.roles`` in
     the file gives exactly those roles
     """
@@ -101,6 +113,7 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             out[k] = v
     return out
+
 
 def _load() -> dict:
     """The config file merged over the defaults, ``_DEFAULTS`` when there is
@@ -127,6 +140,7 @@ _CONFIG = _load()
 def _fail(msg: str):
     raise SystemExit(f"kndb config error in {CONFIG_PATH}: {msg}")
 
+
 def _abs(path: str) -> str:
     """A configured path made absolute.
     A relative one is read against the project root, never the working
@@ -134,6 +148,7 @@ def _abs(path: str) -> str:
     """
     p = Path(path)
     return str(p if p.is_absolute() else (BASE_DIR / p))
+
 
 def _num(section: str, cast=int):
     """The value under a dotted key, through ``cast``.
@@ -147,6 +162,7 @@ def _num(section: str, cast=int):
     except (TypeError, ValueError):
         _fail(f"{section} must be a number, got {node!r}")
 
+
 def _strs(section: str, value) -> tuple:
     """``value`` as a tuple of strings, or a startup error naming ``section``
     """
@@ -154,6 +170,7 @@ def _strs(section: str, value) -> tuple:
             isinstance(v, str) for v in value):
         _fail(f"{section} must be a list of strings")
     return tuple(value)
+
 
 def _grant(name: str) -> tuple:
     """The roles allowed to perform one kind of action, from
@@ -168,6 +185,7 @@ def _grant(name: str) -> tuple:
         _fail(f"permissions.grants.{name} names roles missing from "
               f"permissions.roles: {', '.join(unknown)}")
     return roles
+
 
 def _tool_security() -> dict:
     """The agent's tool-call guarding policy: one verdict per security level
@@ -195,6 +213,7 @@ def _tool_security() -> dict:
     return {"levels": levels,
             "overrides": _policies("agent.tool_security.overrides", overrides_raw)}
 
+
 def _caps(name: str) -> dict:
     """The switches a project of one kind is created with, every key of
     ``CAP_KEYS`` present.
@@ -217,7 +236,6 @@ SERVER_PORT = _num("server.port")
 DEBUG = bool(_CONFIG["server"]["debug"])
 
 DATA_DIR = _abs(str(_CONFIG["data"]["dir"]))
-# data.db_path when it is set, otherwise kndb.db inside data.dir.
 _db_path = _CONFIG["data"]["db_path"] or os.path.join(
     str(_CONFIG["data"]["dir"]), "kndb.db")
 DB_PATH = _abs(str(_db_path))
@@ -240,6 +258,31 @@ if (not isinstance(_markers, list)
     _fail("llm.thinking_markers must be a list of [open, close] string pairs")
 LLM_THINKING_MARKERS = [(str(p[0]), str(p[1])) for p in _markers]
 
+AUTH_MODE = str(_CONFIG["auth"]["mode"]).strip().lower()
+if AUTH_MODE not in ("dev", "password"):
+    _fail(f"auth.mode must be one of dev, password, got {AUTH_MODE!r}")
+AUTH_SELF_REGISTRATION = bool(_CONFIG["auth"]["allow_registration"])
+AUTH_COOKIE_NAME = str(_CONFIG["auth"]["cookie_name"]).strip() or "kndb_session"
+if any(c in AUTH_COOKIE_NAME for c in " ;,\t\r\n"):
+    _fail("auth.cookie_name contains invalid cookie characters")
+AUTH_COOKIE_SECURE = bool(_CONFIG["auth"]["cookie_secure"])
+AUTH_SESSION_TTL_SECONDS = int(_num("auth.session_ttl_hours") * 3600)
+if AUTH_SESSION_TTL_SECONDS < 3600:
+    _fail("auth.session_ttl_hours must be at least 1")
+DEV_IDENTITY_HEADER = bool(_CONFIG["auth"]["dev_identity_header"])
+DEV_USER_CREATION = bool(_CONFIG["auth"]["dev_user_creation"])
+AUTH_LOGIN_ATTEMPTS = _num("auth.login_attempts")
+AUTH_LOGIN_WINDOW_SECONDS = int(_num("auth.login_window_minutes") * 60)
+if AUTH_LOGIN_ATTEMPTS < 1 or AUTH_LOGIN_WINDOW_SECONDS < 60:
+    _fail("auth login throttling limits must be positive; "
+          "window must be at least 1 minute")
+AUTH_PEPPER = os.environ.get("KNDB_AUTH_PEPPER", "")
+if AUTH_MODE == "password" and len(AUTH_PEPPER.encode("utf-8")) < 32:
+    _fail("password auth requires KNDB_AUTH_PEPPER with at least 32 bytes; "
+          "generate a random secret and keep it outside config/database")
+if AUTH_MODE == "password" and not AUTH_COOKIE_SECURE:
+    _fail("auth.cookie_secure must be true in password mode; serve KNDB over HTTPS")
+
 DEFAULT_USER = str(_CONFIG["permissions"]["default_user"]).strip() or "me"
 ROLES = _strs("permissions.roles", _CONFIG["permissions"]["roles"])
 DEFAULT_ROLE = str(_CONFIG["permissions"]["default_role"])
@@ -250,10 +293,10 @@ OWNER_ROLE = str(_CONFIG["permissions"]["owner_role"])
 if OWNER_ROLE not in ROLES:
     _fail(f"permissions.owner_role {OWNER_ROLE!r} is not in permissions.roles")
 
-WRITE_ROLES = _grant("write")            # add sources, write your own text
-EDIT_OTHERS_ROLES = _grant("edit_others")  # rewrite text somebody else owns
-MANAGE_ROLES = _grant("manage")          # members, settings, project contents
-ADMIN_ROLES = _grant("admin")            # delete the project
+WRITE_ROLES = _grant("write")
+EDIT_OTHERS_ROLES = _grant("edit_others")
+MANAGE_ROLES = _grant("manage")
+ADMIN_ROLES = _grant("admin")
 
 PERSONAL_CAPS = _caps("personal_capabilities")
 TEAM_CAPS = _caps("team_capabilities")

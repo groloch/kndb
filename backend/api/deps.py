@@ -7,6 +7,7 @@ import json
 from fastapi import HTTPException, Request
 
 from backend.core import config
+from backend.content import auth
 from backend.data import notes, projects, store, users
 
 
@@ -37,13 +38,30 @@ async def get_note_or_404(nid: str) -> dict:
     return n
 
 async def current_user(request: Request) -> str:
-    """Caller's name, from the X-KNDB-User header or the kndb_user cookie.
-    A name nobody has used yet is registered on the spot, and no name at all
-    falls back to the default user: identity is claimed here, never proved
-    """
+    """Resolve the verified account in password mode or explicit dev identity."""
+    if config.AUTH_MODE == "password":
+        token = request.cookies.get(config.AUTH_COOKIE_NAME, "")
+        resolved = await auth.resolve_session(token)
+        if resolved is None:
+            raise HTTPException(401, "authentication required")
+        name, csrf_hash = resolved
+        request.state.auth_user = name
+        request.state.auth_csrf_hash = csrf_hash
+        if request.method.upper() not in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+            csrf = request.headers.get("X-KNDB-CSRF", "")
+            if not auth.verify_csrf(csrf, csrf_hash):
+                raise HTTPException(403, "CSRF validation failed")
+        return name
+
+    if not config.DEV_IDENTITY_HEADER:
+        return (await users.ensure())["name"]
     name = (request.headers.get("X-KNDB-User")
             or request.cookies.get("kndb_user") or "").strip()
-    return (await users.ensure(name))["name"]
+    if name and not config.DEV_USER_CREATION and await users.get(name) is None:
+        raise HTTPException(401, "unknown development identity")
+    if name and config.DEV_USER_CREATION:
+        return (await users.ensure(name))["name"]
+    return (await users.ensure())["name"]
 
 async def require_role(pid: str, user: str, *allowed: str) -> str:
     """Caller's role in the project, 403 when they are not a member at all.
