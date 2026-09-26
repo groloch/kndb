@@ -19,6 +19,7 @@ function setMode(mode, registrationEnabled) {
   document.querySelector("#auth-card").hidden = mode === "landing";
   document.querySelector("#nav-signin").hidden = mode === "login";
   document.querySelector("#nav-register").hidden = !registrationEnabled || register;
+  document.querySelector("#login-signup-link").hidden = !registrationEnabled;
 }
 
 async function start() {
@@ -43,7 +44,9 @@ async function start() {
     return;
   }
   const registrationEnabled = Boolean(info.registration_enabled);
-  const mode = requestedMode === "register" && registrationEnabled ? "register" : "login";
+  const mode = requestedMode === "register" && registrationEnabled
+    ? "register"
+    : location.pathname === "/" ? "landing" : "login";
   setMode(mode, registrationEnabled);
 }
 

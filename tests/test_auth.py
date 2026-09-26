@@ -46,6 +46,9 @@ with TestClient(app.app, base_url="https://testserver") as client:
     assert protected.status_code == 303 and protected.headers["location"].startswith("/login?next=")
     registration_page = client.get("/login?mode=register")
     assert "Create your account" in registration_page.text
+    login_page = client.get("/login")
+    assert "Welcome back" in login_page.text
+    assert "id=\"login-signup-link\" hidden" in login_page.text
     config_info = client.get("/api/auth/config").json()
     assert config_info["registration_enabled"] is True
     for _ in range(2):
