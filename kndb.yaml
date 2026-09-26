@@ -1,19 +1,6 @@
-# KNDB configuration — loaded by backend/core/config.py at startup.
-#
-# Anything omitted falls back to the built-in defaults (see the _DEFAULTS dict
-# in backend/core/config.py). Mappings merge key by key, so you can override a
-# single capability; lists replace the default wholesale.
-# The file location can be overridden with the KNDB_CONFIG environment variable.
-# NOTE: other KNDB_* environment variables are no longer read for these values.
-#
-# Everything below is read once, at import — restart the server after editing.
-#
-# If you put secrets here (e.g. a real API key), consider adding this file
-# to .gitignore so it never reaches version control.
-
 server:
   host: 127.0.0.1
-  port: 5000
+  port: 28479
   debug: true            # enables uvicorn auto-reload
 
 data:
@@ -23,32 +10,31 @@ llm:
   base_url: http://127.0.0.1:1234/v1   # OpenAI-compatible server
   api_key: ""                          # leave empty for local servers
   model: openai/gpt-oss-20b            # model name sent in requests
-  # model: liquid/lfm2.5-1.2b
-
-  # base_url: http://192.168.1.12:1234/v1
-  # api_key: ""
-  # model: liquid/lfm2-24b-a2b
 
   retries: 3                           # transient-error retries (429/5xx/connection)
 
   tool_mode: auto                       # agent tool calls: auto | native | text
-  # Open/close marker pairs that wrap a reasoning block when the provider
-  # leaves it inline in the content stream, tried in order. lfm2.5 thinking
-  # models write a leading " thinking" ... " response" block (sometimes
-  # truncated); "text" models often use <thinking> ... </thinking>.
   thinking_markers:
     - ["<thinking>", "</thinking>"]
     - [" thinking", " response"]
     - ["<think>", "response"]   # truncated opener
 
+agent:
+  tool_security:
+    levels:
+      read: allow            # everything the agent can do today
+      write: prompt          # reserved for the upcoming writing tools
+      admin: prompt          # destructive or member-affecting tools
+    overrides: {}
+      # delete_source: prompt   # example: harden one tool by name
+  approval_timeout: 300
+
 permissions:
-  default_user: me        # who an unidentified request acts as, until real auth lands
+  default_user: me
   roles: [owner, maintainer, contributor, spectator]
   default_role: contributor              # role a new member gets
   owner_role: owner       # given to whoever creates a project; it can never run out
 
-  # Which roles may do what. A role left out of every grant can only read.
-  # Names not listed in `roles` above are refused at startup.
   grants:
     write:       [owner, maintainer, contributor]  # import sources, write your own notes
     edit_others: [owner, maintainer]               # rewrite or delete someone else's lines
@@ -56,8 +42,6 @@ permissions:
     admin:       [owner]                           # delete the project
 
 projects:
-  # What a new project starts with. Each switch is stored per project and stays
-  # editable from the project settings panel afterwards.
   personal_capabilities:  # the workspace every user gets
     allow_quiz: true      # quizzes can be generated from a source
     multi_notes: false    # one note page per source, rather than one per author

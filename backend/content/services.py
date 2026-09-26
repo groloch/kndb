@@ -521,7 +521,7 @@ async def _text_turn(chat: list, functions: dict, guard: tool_guard.ToolGuard,
             result = None
             async for item in _guarded_run(guard, security, functions, name, args):
                 if item[0] == "event":
-                    yield item[1]
+                    yield ("event", item[1])
                 else:
                     result = item[1]
             yield ("event", {"type": "toolcall", "tool": name, "args": args,
@@ -576,7 +576,7 @@ async def _native_turn(chat: list, tools: list, functions: dict,
         result = None
         async for item in _guarded_run(guard, security, functions, name, args):
             if item[0] == "event":
-                yield item[1]
+                yield ("event", item[1])
             else:
                 result = item[1]
         tool_msgs.append({"role": "tool", "content": result,

@@ -19,11 +19,12 @@ async def _list_sources(pid: str):
 async def _list_sources_tags(pid: str):
     sources = await store.list_sources(pid=pid)
 
-    tags = {s["tags"] for s in sources if s["tags"]}
+    tags = {t.strip() for s in sources for t in (s["tags"] or "").split(",")
+            if t.strip()}
 
     if len(tags) == 0:
         return "No tags found."
-    return json.dumps(list(tags))
+    return json.dumps(sorted(tags))
 
 async def _search_sources_by_title(pid: str, title: str):
     sources = await store.list_sources(pid=pid, q=title)
@@ -91,10 +92,17 @@ async def _list_folder_tree(pid: str):
 
 
 async def _get_folder_readme(pid: str, folder: str):
-    page = await notes.readme_for_folder(pid, folder)
+    page = await notes.readme_for_folder(pid, _unquote(folder))
     if page is None:
-        return f"No readme for folder '{folder or '(root)'}'."
+        return f"No readme for folder '{_unquote(folder) or '(root)'}'."
     return page["content"] or "(empty readme)"
+
+
+def _unquote(folder: str) -> str:
+    """A folder argument with the stray quotes or whitespace a model may wrap
+    it in stripped — the tree's own names never carry quotes
+    """
+    return (folder or "").strip().strip("'\"").strip()
 
 
 async def _add_tag_to_source(pid: str, source_id: str, tag: str):
@@ -106,16 +114,16 @@ async def _add_tag_to_source(pid: str, source_id: str, tag: str):
     tag = (tag or "").strip()
     if not tag:
         return "tag required."
-    tags = list(source["tags"] or [])
+    tags = [t.strip() for t in (source["tags"] or "").split(",") if t.strip()]
     if tag not in tags:
         tags.append(tag)
-        await store.update_meta(source_id, tags=tags)
+        await store.update_meta(source_id, tags=", ".join(tags))
     return json.dumps({"source_id": source_id, "tags": tags})
 
 
 async def _create_folder(pid: str, path: str):
     try:
-        created = await projects.create_folder(pid, path)
+        created = await projects.create_folder(pid, _unquote(path))
     except ValueError as e:
         return f"could not create folder: {e}"
     return json.dumps({"created": created})
@@ -124,7 +132,7 @@ async def _create_folder(pid: str, path: str):
 async def _move_source(pid: str, source_id: str, folder: str):
     if not await projects.has_source(pid, source_id):
         return f"Source {source_id} is not in this project."
-    moved = await projects.set_source_folder(pid, source_id, folder)
+    moved = await projects.set_source_folder(pid, source_id, _unquote(folder))
     if not moved:
         return f"Source {source_id} is not in this project."
     return json.dumps({"source_id": source_id,
@@ -135,7 +143,7 @@ async def _add_source_to_project(pid: str, source_id: str, folder: str = ""):
     source = await store.get_source(source_id)
     if source is None:
         return "Source not found. It may have to be imported first — the agent cannot import."
-    added = await projects.add_source(pid, source_id, folder=folder)
+    added = await projects.add_source(pid, source_id, folder=_unquote(folder))
     if not added:
         return f"Source {source_id} is already in this project."
     return json.dumps({"added": source_id, "title": source["title"],
@@ -160,7 +168,7 @@ async def _remove_source_from_project(pid: str, source_id: str, confirm: bool = 
 
 async def _rename_folder(pid: str, path: str, new_path: str):
     try:
-        renamed = await projects.rename_folder(pid, path, new_path)
+        renamed = await projects.rename_folder(pid, _unquote(path), _unquote(new_path))
     except ValueError as e:
         return f"could not rename folder: {e}"
     return json.dumps({"renamed_to": renamed})

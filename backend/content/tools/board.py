@@ -1,10 +1,10 @@
 """The agent's tools over the kanban board: reading it as structure, adding
-cards, and moving them between columns.
+cards, moving them between columns, and creating columns.
 
-Scoped by the review: the agent may create cards and move them between
-columns, but never renames or deletes — card fields are still in flux
-(checkable steps are planned), so there is no update_card tool yet. Cards
-are created with the calling user as author (``wants_user``).
+Scoped by the review: the agent may create cards, columns, and move cards
+between columns, but never renames or deletes — card fields are still in
+flux (checkable steps are planned), so there is no update_card tool yet.
+Cards are created with the calling user as author (``wants_user``).
 """
 
 import json
@@ -84,6 +84,28 @@ async def _move_card(pid: str, card_id: str, column: str = "",
                        "position": card["position"]})
 
 
+def _unquote(name: str) -> str:
+    """A column name with the wrapping whitespace or a single layer of stray
+    quotes stripped — the model occasionally wraps string arguments in them
+    """
+    name = (name or "").strip()
+    if len(name) >= 2 and name[0] == name[-1] and name[0] in "'\"":
+        name = name[1:-1].strip()
+    return name
+
+
+async def _create_column(pid: str, name: str, position: int = None):
+    name = _unquote(name)
+    if not name:
+        return "A column needs a name."
+    try:
+        col = await board.create_column(pid, name, position=position)
+    except ValueError as e:
+        return f"could not create column: {e}"
+    return json.dumps({"created": col["id"], "name": col["name"],
+                       "position": col["position"]})
+
+
 _get_board_tool = {
     "security": "read",
     "function": _get_board,
@@ -137,10 +159,27 @@ _move_card_tool = {
         }
     }
 }
+_create_column_tool = {
+    "security": "write",
+    "function": _create_column,
+    "tool_dict": {
+        "name": "create_column",
+        "description": "Create a board column, by default at the end (position 0 puts it first).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "position": {"type": "integer", "description": "Where to place it among the columns; omitted for the end."}
+            },
+            "required": ["name"]
+        }
+    }
+}
 
 
 TOOLS = (
     _get_board_tool,
+    _create_column_tool,
     _create_card_tool,
     _move_card_tool,
 )
