@@ -292,6 +292,26 @@ function makeLibrary(cfg) {
     if (L.noteDirty) await saveNote();
   }
 
+  async function saveNow() {
+    /* saveNote, but throws when the write did not land, so a caller that must
+    * not proceed on a failed save (appending a quote) can stop
+    */
+    if (!L.noteId || !L.noteDirty) return;
+    const content = $("#note-editor").value;
+    const nid = L.noteId;
+    L.noteDirty = false;
+    try {
+      await cfg.persist(content, nid);
+      setSaveState("saved");
+    } catch (e) {
+      L.noteDirty = true;
+      setSaveState(cfg.saveState ? cfg.saveState(e) : "save error");
+      if (cfg.onSaveError) await cfg.onSaveError(e, nid);
+      else toast("Note save failed: " + e.message, "err");
+      throw e;
+    }
+  }
+
   function applyNoteMode() {
     /* Shows either the textarea or the rendered preview.
     * A standalone note is always in edit mode, its preview being the viewer
@@ -479,12 +499,75 @@ function makeLibrary(cfg) {
       applyNoteMode();
     },
     openNote: async nid => nid === L.noteId,
+    appendToNote: async text => {
+      /* Appends a block to the open note and saves it, returning where the
+      * block landed in the saved text so a link can be anchored to it.
+      * Throws when there is no note or the save fails — no link is made then
+      */
+      await flushNote();
+      const nid = L.noteId;
+      if (!nid) throw new Error("Open a note page to quote into first");
+      const ta = $("#note-editor");
+      const cur = ta.value;
+      const sep = cur.trim() ? "\n\n" : "";
+      const block = sep + text;
+      const block_start = cur.length;
+      const start = block_start + sep.length;
+      ta.value = cur + block;
+      L.noteDirty = true;
+      await saveNow();
+      return { note_id: nid, content: ta.value,
+               block_start, start, end: start + text.length, block };
+    },
+    stripFromNote: async (nid, block_start, end, block) => {
+      /* Removes a block appendToNote added, but only while it is still exactly
+      * there — false when the note moved on, so undo never eats an edit
+      */
+      if (L.noteId !== nid) return false;
+      await flushNote();
+      const ta = $("#note-editor");
+      const cur = ta.value;
+      if (cur.slice(block_start, end) !== block) return false;
+      ta.value = cur.slice(0, block_start) + cur.slice(end);
+      L.noteDirty = true;
+      try { await saveNow(); } catch (_) { return false; }
+      return true;
+    },
     onChange: ({ lost }) => {
       $("#note-anchor-state").textContent = lost
         ? lost + (lost === 1 ? " link no longer resolves" : " links no longer resolve")
         : "";
     },
   }, cfg.anchors || {}));
+
+  function neutralizeFrameLinks(win) {
+    /* Kills navigation inside an archived page: its links point at the live
+    * web, which the reader pane has no business opening. The listeners are
+    * attached from this (same-origin) parent document in the capture phase,
+    * so they run before anything in the page and ignore any CSP meta the
+    * archived markup carried along. Text selection is untouched.
+    */
+    const d = win.document;
+    if (!d || d.__kndbLinksOff) return;
+    d.__kndbLinksOff = true;
+    const block = e => {
+      const a = e.target && e.target.closest && e.target.closest("a");
+      if (a) { e.preventDefault(); e.stopPropagation(); }
+    };
+    d.addEventListener("click", block, true);
+    d.addEventListener("auxclick", block, true);
+  }
+
+  $("#res-frame").addEventListener("load", () => {
+    /* A fresh document in the frame: links off, and the anchor surface bound
+    * to *this* document, since the previous one is gone
+    */
+    try {
+      const w = $("#res-frame").contentWindow;
+      if (w) neutralizeFrameLinks(w);
+    } catch (_) { /* cross-origin: nothing to neutralize */ }
+    ANCHORS.load();
+  });
 
   $("#btn-new-folder").addEventListener("click", () => TREE.newFolder());
   $("#btn-new-note").addEventListener("click", () => TREE.newNote());

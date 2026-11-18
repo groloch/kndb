@@ -22,7 +22,7 @@ function makeAnchors(cfg) {
 
   let docSurface = null;    // markdown / HTML documents (PDFs use PDFView)
   let preview = null;       // the rendered note
-  let menu = null, docMenu = null, chip = null, chooser = null;
+  let menu = null, docMenu = null, chip = null, chooser = null, composer = null;
   let frameDoc = null;
 
   const watched = () => (frameDoc ? [document, frameDoc] : [document]);
@@ -266,15 +266,20 @@ function makeAnchors(cfg) {
   function hideMenu() { if (menu) menu.classList.add("hidden"); }
 
   function ensureDocMenu() {
-    /* Builds once the document's "Link to note" floating menu,
-    * since PDF pages and frames have their own coordinates
+    /* Builds once the document's floating menu, since PDF pages and frames
+    * have their own coordinates. Two ways to use a selection: link it to a
+    * sentence picked in the note, or write about it and append that to the
+    * note in one go
     */
     if (docMenu) return docMenu;
     docMenu = document.createElement("div");
     docMenu.className = "anchor-menu floating hidden";
-    docMenu.innerHTML = '<button type="button" class="btn small">Link to note</button>';
+    docMenu.innerHTML =
+      '<button type="button" class="btn small" data-act="link">Link to note</button>'
+      + '<button type="button" class="btn small" data-act="quote">Quote into note…</button>';
     docMenu.addEventListener("mousedown", e => e.preventDefault());
-    docMenu.querySelector("button").addEventListener("click", startFromDoc);
+    docMenu.querySelector('[data-act="link"]').addEventListener("click", startFromDoc);
+    docMenu.querySelector('[data-act="quote"]').addEventListener("click", startQuoteFromDoc);
     document.body.appendChild(docMenu);
     return docMenu;
   }
@@ -308,8 +313,8 @@ function makeAnchors(cfg) {
     */
     const m = ensureDocMenu();
     m.classList.remove("hidden");
-    m.style.left = Math.min(x + 6, window.innerWidth - 130) + "px";
-    m.style.top = Math.min(y + 8, window.innerHeight - 40) + "px";
+    m.style.left = Math.min(x + 6, window.innerWidth - 170) + "px";
+    m.style.top = Math.min(y + 8, window.innerHeight - 80) + "px";
   }
 
   function hideDocMenu() { if (docMenu) docMenu.classList.add("hidden"); }
@@ -357,6 +362,85 @@ function makeAnchors(cfg) {
     listenDuringLink();
   }
 
+  async function startQuoteFromDoc() {
+    /* The single-selection flow: the passage is already selected, what is
+    * left is to write about it — the text is appended to the open note and
+    * the link made in one go, no second selection needed
+    */
+    hideDocMenu();
+    const doc_loc = captureDoc();
+    if (!doc_loc) return;
+    if (!cfg.noteId()) return toast("Open a note page to quote into first", "warn");
+    if (!cfg.appendToNote) return toast("Quoting into a note is not available here", "warn");
+    S.pending = {
+      dir: "quote", noteId: cfg.noteId(), sourceId: cfg.sourceId(), doc_loc,
+    };
+    document.body.classList.add("linking-note");
+    const m = ensureDocMenu();
+    showComposer(Number(m.style.left) || window.innerWidth / 2,
+                 Number(m.style.top) || window.innerHeight / 3);
+    listenDuringLink();
+  }
+
+  function ensureComposer() {
+    /* Builds once the "write about this passage" popup
+    */
+    if (composer) return composer;
+    composer = document.createElement("div");
+    composer.className = "anchor-composer floating hidden";
+    composer.innerHTML =
+      '<textarea rows="3" placeholder="Write about this passage — it is appended to the open note"></textarea>'
+      + '<div class="anchor-composer-row">'
+      + '<button type="button" class="btn small primary" data-act="add">Add to note</button>'
+      + '<button type="button" class="btn small" data-act="cancel">Cancel</button>'
+      + "</div>";
+    composer.addEventListener("mousedown", e => e.preventDefault());
+    composer.querySelector('[data-act="add"]').addEventListener("click", submitQuote);
+    composer.querySelector('[data-act="cancel"]').addEventListener("click", leaveLinkMode);
+    composer.querySelector("textarea").addEventListener("keydown", e => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) submitQuote();
+    });
+    document.body.appendChild(composer);
+    return composer;
+  }
+
+  function showComposer(x, y) {
+    /* Shows the composer where the doc menu was, clamped to the window
+    */
+    const c = ensureComposer();
+    c.querySelector("textarea").value = "";
+    c.classList.remove("hidden");
+    const w = 300;
+    c.style.width = w + "px";
+    c.style.left = Math.max(4, Math.min(x + 6, window.innerWidth - w - 12)) + "px";
+    c.style.top = Math.max(4, Math.min(y + 8, window.innerHeight - 150)) + "px";
+    c.querySelector("textarea").focus();
+  }
+
+  function hideComposer() { if (composer) composer.classList.add("hidden"); }
+
+  async function submitQuote() {
+    /* Appends the written text to the note, then links it to the passage
+    */
+    const p = S.pending;
+    if (!p || p.dir !== "quote") return;
+    const text = ensureComposer().querySelector("textarea").value.trim();
+    if (!text) return;
+    hideComposer();
+    let appended;
+    try {
+      appended = await cfg.appendToNote(text);
+    } catch (err) {
+      leaveLinkMode();
+      return toast("Could not add to the note: " + err.message, "err");
+    }
+    const note_loc = quoteLocator(appended.content, appended.start, appended.end);
+    await commit(note_loc, p.doc_loc, {
+      nid: appended.note_id, block_start: appended.block_start,
+      end: appended.end, block: appended.block,
+    });
+  }
+
   function listenDuringLink() {
     /* Watches every document, frames included, for the pick or for Escape
     */
@@ -397,9 +481,9 @@ function makeAnchors(cfg) {
   function onPickDuringLink(e) {
     /* Other end of the link.
     * A passage when started from the note, a sentence when started from
-    * the document
+    * the document. A quote needs no second pick: the composer has it
     */
-    if (!S.pending) return;
+    if (!S.pending || S.pending.dir === "quote") return;
     if (S.pending.dir === "fromNote") {
       if (!inDocPane(e.target)) return;
       setTimeout(() => {
@@ -437,6 +521,7 @@ function makeAnchors(cfg) {
     S.pending = null;
     cfg.editor().readOnly = !cfg.canLink();
     document.body.classList.remove("linking", "linking-note");
+    hideComposer();
     for (const d of watched()) {
       d.removeEventListener("keydown", onKeyDuringLink, true);
       d.removeEventListener("mouseup", onPickDuringLink, true);
@@ -444,8 +529,10 @@ function makeAnchors(cfg) {
     draw();
   }
 
-  async function commit(note_loc, doc_loc) {
-    /* Saves the finished link, then reveals it and offers to undo
+  async function commit(note_loc, doc_loc, quote) {
+    /* Saves the finished link, then reveals it and offers to undo.
+    * A quote also remembers the block it appended to the note, so undo can
+    * take that back too
     */
     const p = S.pending;
     leaveLinkMode();
@@ -463,7 +550,7 @@ function makeAnchors(cfg) {
       const a = d.anchor;
       revealInDoc(a);
       if (preview) preview.flash(a.id);
-      offerUndo(a);
+      offerUndo(a, quote);
     } catch (err) {
       toast("Could not link: " + err.message, "err");
     }
@@ -496,19 +583,24 @@ function makeAnchors(cfg) {
     }
   }
 
-  function offerUndo(anchor) {
-    /* Undo chip, for the 8 seconds following a link
+  function offerUndo(anchor, quote) {
+    /* Undo chip, for the 8 seconds following a link. A quoted block is taken
+    * back out of the note as well, when it is still exactly there
     */
     if (chip) chip.remove();
     chip = document.createElement("div");
     chip.className = "anchor-chip";
     chip.innerHTML = '<span></span><button type="button" class="btn small">Undo</button>';
-    chip.querySelector("span").textContent = anchor.doc_loc.page
-      ? "Linked to page " + anchor.doc_loc.page
-      : "Linked to the document";
+    chip.querySelector("span").textContent = (quote ? "Quoted into the note — " : "")
+      + (anchor.doc_loc.page
+        ? "linked to page " + anchor.doc_loc.page
+        : "linked to the document");
     chip.querySelector("button").addEventListener("click", async () => {
       chip.remove(); chip = null;
       await unlink(anchor.id, true);
+      if (quote && cfg.stripFromNote) {
+        await cfg.stripFromNote(quote.nid, quote.block_start, quote.end, quote.block);
+      }
     });
     cfg.wrap().appendChild(chip);
     const mine = chip;
@@ -699,7 +791,7 @@ function makeAnchors(cfg) {
     cfg.layer().innerHTML = "";
     if (preview) preview.clear();
     if (docSurface) { docSurface.clear(); docSurface.detach(); docSurface = null; }
-    hideMenu(); hideDocMenu(); hideChooser();
+    hideMenu(); hideDocMenu(); hideChooser(); hideComposer();
     report();
   }
 

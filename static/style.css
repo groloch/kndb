@@ -1122,7 +1122,30 @@ body.linking .link-hint {
 }
 .anchor-mark.flash { background: rgba(99, 102, 241, .25); }
 
-.anchor-menu.floating { position: fixed; z-index: 60; }
+.anchor-menu.floating {
+  position: fixed; z-index: 60;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 5px; background: var(--panel);
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  box-shadow: var(--shadow);
+}
+
+/* The single-selection quote flow: write about the selected passage, the
+ * text is appended to the open note and linked to the passage in one go. */
+.anchor-composer {
+  position: fixed; z-index: 61; padding: 8px;
+  background: var(--panel); border: 1px solid var(--border-strong);
+  border-radius: var(--r-md); box-shadow: var(--shadow);
+}
+.anchor-composer textarea {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  font: inherit; font-size: 12px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 8px;
+}
+.anchor-composer-row {
+  display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px;
+}
 
 .anchor-chooser {
   position: fixed; z-index: 60; min-width: 220px; max-width: 300px;

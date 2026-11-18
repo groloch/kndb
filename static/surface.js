@@ -158,6 +158,19 @@ function makeTextSurface(cfg) {
     return overlay;
   }
 
+  function origin() {
+    /* Viewport position of the overlay's top-left corner. Rects are stored in
+    * the overlay's own space, and measuring the overlay itself — rather than
+    * root plus the scroller's scroll — stays correct whether the root scrolls
+    * its own content (a markdown viewer) or an ancestor does (the <html> of
+    * an archived page in its frame), where the root's rect already carries
+    * the scroll and adding it again would sink every highlight by that much
+    */
+    const ov = ensureOverlay();
+    const b = ov.getBoundingClientRect();
+    return { x: b.left, y: b.top };
+  }
+
   function show(list) {
     /* Draws a new set of links, dropping the entries without a locator
     */
@@ -172,13 +185,11 @@ function makeTextSurface(cfg) {
     */
     const r = root();
     if (!r || !r.isConnected) return;
-    ensureOverlay();
+    const o = origin();
     overlay.innerHTML = "";
     if (!items.length) return;
 
     const map = flatten();
-    const rr = r.getBoundingClientRect();
-    const sc = scroller();
     for (const it of items) {
       it.rects = [];
       const at = resolveLocator(map.text, it.loc);
@@ -192,8 +203,8 @@ function makeTextSurface(cfg) {
       } catch (_) { continue; }
       for (const cr of mergeRowRects([...range.getClientRects()])) {
         const box = {
-          x: cr.left - rr.left + sc.scrollLeft,
-          y: cr.top - rr.top + sc.scrollTop,
+          x: cr.left - o.x,
+          y: cr.top - o.y,
           w: cr.width, h: cr.height,
         };
         it.rects.push(box);
@@ -213,12 +224,10 @@ function makeTextSurface(cfg) {
   function hitTest(clientX, clientY) {
     /* Links whose rectangles cover a viewport point, in draw order
     */
-    const r = root();
-    if (!r) return [];
-    const rr = r.getBoundingClientRect();
-    const sc = scroller();
-    const x = clientX - rr.left + sc.scrollLeft;
-    const y = clientY - rr.top + sc.scrollTop;
+    if (!root() || !overlay) return [];
+    const o = origin();
+    const x = clientX - o.x;
+    const y = clientY - o.y;
     return items.filter(it => (it.rects || []).some(
       b => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h));
   }
@@ -267,14 +276,17 @@ function makeTextSurface(cfg) {
   }
 
   function reveal(id) {
-    /* Scrolls to a link and flashes it, false when it is not drawn
+    /* Scrolls to a link and flashes it, false when it is not drawn.
+    * The stored rect is in overlay space; its current viewport position is
+    * that plus the overlay's own top, whatever element scrolls
     */
     const it = items.find(x => x.id === id);
     if (!it || !(it.rects || []).length) return false;
     const sc = scroller();
-    const y = it.rects[0].y;
-    if (y < sc.scrollTop || y > sc.scrollTop + sc.clientHeight - 30) {
-      sc.scrollTo({ top: Math.max(0, y - sc.clientHeight / 3), behavior: "smooth" });
+    const vy = it.rects[0].y + overlay.getBoundingClientRect().top;
+    if (vy < 0 || vy > sc.clientHeight - 30) {
+      sc.scrollTo({ top: Math.max(0, sc.scrollTop + vy - sc.clientHeight / 3),
+                    behavior: "smooth" });
     }
     flash(id);
     return true;
