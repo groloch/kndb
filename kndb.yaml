@@ -6,6 +6,23 @@ server:
 data:
   dir: data               # relative to the project root, or an absolute path
 
+auth:
+  # dev keeps the local identity switcher and header identity for development
+  # only — it is NOT authentication and must never face an untrusted network.
+  # password enables verified accounts with server-side sessions; it requires
+  # KNDB_AUTH_PEPPER (>= 32 random bytes, env var only, never in this file) and
+  # cookie_secure: true with HTTPS. See README "Authentication and account
+  # safety".
+  mode: dev               # dev | password
+  allow_registration: false   # password mode only: open self-service sign-up
+  cookie_name: kndb_session
+  cookie_secure: true     # must be true in password mode
+  session_ttl_hours: 24   # minimum 1
+  dev_identity_header: true   # dev mode only: trust X-KNDB-User / kndb_user
+  dev_user_creation: true     # dev mode only: allow POST /api/users
+  login_attempts: 10      # failed logins per account/client bucket ...
+  login_window_minutes: 15    # ... within this sliding window
+
 llm:
   base_url: http://127.0.0.1:1234/v1   # OpenAI-compatible server
   api_key: ""                          # leave empty for local servers

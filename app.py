@@ -35,6 +35,12 @@ async def lifespan(_app: FastAPI):
     await migrations.run()
     if config.AUTH_MODE == "dev":
         await users.ensure()  # development default identity
+        host = config.SERVER_HOST
+        if host not in ("localhost", "::1") and not host.startswith("127."):
+            print(f"WARNING: auth.mode is 'dev' (no authentication) but the server "
+                  f"is bound to {host}, not loopback. Anyone who can reach this "
+                  f"port can act as any user. Do not expose a dev-mode instance "
+                  f"to an untrusted network.", flush=True)
     yield
     await llm.aclose()
     await fetchers.aclose()
