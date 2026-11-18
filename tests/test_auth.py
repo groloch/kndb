@@ -44,6 +44,9 @@ with TestClient(app.app, base_url="https://testserver") as client:
     assert landing.status_code == 200 and "Make room for deeper thinking" in landing.text
     protected = client.get("/projects", follow_redirects=False)
     assert protected.status_code == 303 and protected.headers["location"].startswith("/login?next=")
+    settings = client.get("/settings", follow_redirects=False)
+    assert settings.status_code == 303 and "/login?next=" in settings.headers["location"]
+    assert "settings" in settings.headers["location"]
     registration_page = client.get("/login?mode=register")
     assert "Create your account" in registration_page.text
     login_page = client.get("/login")
@@ -60,6 +63,10 @@ with TestClient(app.app, base_url="https://testserver") as client:
     asyncio.run(clear_login_failures("alice", "testclient"))
     login = client.post("/api/auth/login", json={"name":"alice", "password":"a very long secure passphrase"})
     assert login.status_code == 200, login.text
+    authenticated_settings = client.get("/settings")
+    assert authenticated_settings.status_code == 200
+    assert 'id="settings-password-form"' in authenticated_settings.text
+    assert "Preferences" in authenticated_settings.text
     csrf = client.cookies.get("kndb_csrf")
     assert "httponly" in login.headers["set-cookie"].lower()
     assert client.get("/api/me", headers={"X-KNDB-User":"someone-else"}).json()["user"]["name"] == "alice"

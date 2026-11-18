@@ -78,6 +78,11 @@ async def project_page(request: Request, pid: str):
     return await _protected_page(request, "project.html")
 
 
+@router.get("/settings")
+async def settings_page(request: Request):
+    return await _protected_page(request, "settings.html")
+
+
 @router.get("/agent")
 async def agent_page(request: Request):
     """The user's own workspace agent at the top level.

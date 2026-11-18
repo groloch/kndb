@@ -162,48 +162,6 @@ function modalEl(id) { return $(id.startsWith("#") ? id : `#${id}`); }
 function openModal(id) { modalEl(id).classList.remove("hidden"); }
 function closeModal(id) { modalEl(id).classList.add("hidden"); }
 
-function askSecretModal(opts = {}) {
-  return new Promise(resolve => {
-    const modal = document.createElement("div");
-    modal.className = "modal";
-    modal.innerHTML = '<div class="modal-box narrow"><div class="modal-head"><h3></h3>'
-      + '<button class="x" type="button">×</button></div><div class="modal-body">'
-      + '<label class="lbl"></label><input class="input" type="password" autocomplete="current-password">'
-      + '<div class="modal-actions"><p class="muted hint"></p><button class="btn" data-act="cancel" type="button">Cancel</button>'
-      + '<button class="btn primary" data-act="ok" type="button"></button></div></div></div>';
-    const input = $("input", modal), ok = $('[data-act="ok"]', modal);
-    $("h3", modal).textContent = opts.title || "";
-    $(".lbl", modal).textContent = opts.label || "Password";
-    $(".hint", modal).textContent = opts.hint || "";
-    ok.textContent = opts.submit || "Continue";
-    ok.disabled = true;
-    const finish = value => { modal.remove(); resolve(value); };
-    input.addEventListener("input", () => { ok.disabled = !input.value; });
-    input.addEventListener("keydown", e => { if (e.key === "Enter" && input.value) finish(input.value); });
-    ok.addEventListener("click", () => { if (input.value) finish(input.value); });
-    modal.addEventListener("click", e => {
-      if (e.target.closest('[data-act="cancel"]') || e.target.closest(".x")) finish(null);
-    });
-    modal.addEventListener("mousedown", e => { if (e.target === modal) finish(null); });
-    document.body.appendChild(modal);
-    input.focus();
-  });
-}
-
-async function changePasswordDialog() {
-  const current = await askSecretModal({ title: "Change password", label: "Current password" });
-  if (!current) return;
-  const next = await askSecretModal({ title: "Change password", label: "New password (14+ characters)",
-    hint: "Use a long, unique passphrase.", submit: "Change password" });
-  if (!next) return;
-  try {
-    await api("/api/auth/password", { method: "POST", body: {
-      current_password: current, new_password: next,
-    }});
-    location.href = "/login";
-  } catch (e) { toast("Password change failed: " + e.message, "err"); }
-}
-
 function askModal(opts = {}) {
   /* Asks for one value, the app's own window.prompt.
   * Resolves to the trimmed input, or to null if the user backed out.
@@ -684,9 +642,8 @@ function renderUserSwitcher() {
   if (!host) return;
   if (KNDB.authMode === "password") {
     host.innerHTML = `<span class="user-label">${escapeHtml(KNDB.me && (KNDB.me.display_name || KNDB.me.name))}</span>`
-      + '<button id="auth-password" class="btn small">Change password</button>'
+      + '<a class="btn small" href="/settings">Settings</a>'
       + '<button id="auth-logout" class="btn small">Log out</button>';
-    $("#auth-password").addEventListener("click", () => changePasswordDialog());
     $("#auth-logout").addEventListener("click", async () => {
       try { await api("/api/auth/logout", { method: "POST" }); location.href = "/login"; }
       catch (e) { toast("Log out failed: " + e.message, "err"); }
